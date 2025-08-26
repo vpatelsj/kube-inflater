@@ -180,22 +180,32 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config, exp
 	logInfo(fmt.Sprintf("🎈 Inflating cluster with %d hollow nodes...", expectedCount))
 
 	deadline := time.Now().Add(cfg.WaitTimeout)
-	for time.Now().Before(deadline) {
-		_, readyCount, err := nodes.ListKubemarkNodes(ctx, clients.clientset)
-		if err != nil {
-			logWarn(fmt.Sprintf("Failed to list nodes: %v", err))
-			time.Sleep(5 * time.Second)
-			continue
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logInfo("Context cancelled, stopping node wait")
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				break
+			}
+
+			_, readyCount, err := nodes.ListKubemarkNodes(ctx, clients.clientset)
+			if err != nil {
+				logWarn(fmt.Sprintf("Failed to list nodes: %v", err))
+				continue
+			}
+
+			logInfo(fmt.Sprintf("[INFLATE] Ready nodes: %d/%d", readyCount, expectedCount))
+
+			if readyCount >= expectedCount {
+				logInfo("🎈 [FULL] Cluster fully inflated! All nodes ready!")
+				return nil
+			}
 		}
-
-		logInfo(fmt.Sprintf("[INFLATE] Ready nodes: %d/%d", readyCount, expectedCount))
-
-		if readyCount >= expectedCount {
-			logInfo("🎈 [FULL] Cluster fully inflated! All nodes ready!")
-			return nil
-		}
-
-		time.Sleep(10 * time.Second)
 	}
 
 	return fmt.Errorf("timeout waiting for nodes to become ready")
@@ -223,13 +233,13 @@ func runPerformanceTests(ctx context.Context, clients *Clients, cfg *cfgpkg.Conf
 	elapsed := time.Since(start)
 	avgMs := float64(elapsed.Milliseconds()) / float64(cfg.PerfTests)
 
-	logPerf(fmt.Sprintf("Performance Results:"))
+	logPerf("Performance Results:")
 	logPerf(fmt.Sprintf("  Total time: %v", elapsed))
 	logPerf(fmt.Sprintf("  Average per call: %.2fms", avgMs))
 }
 
 func cleanupResources(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
-	logInfo("Starting cleanup of test resources...")
+	logInfo("Starting comprehensive cleanup of test resources...")
 
 	// Delete deployments
 	deployments, err := clients.clientset.AppsV1().Deployments(cfg.Namespace).List(ctx, metav1.ListOptions{
@@ -261,7 +271,37 @@ func cleanupResources(ctx context.Context, clients *Clients, cfg *cfgpkg.Config)
 		}
 	}
 
-	logInfo("Cleanup completed")
+	// Delete kubeconfig secret
+	logInfo("Deleting kubeconfig secret hollow-node-kubeconfig")
+	err = clients.clientset.CoreV1().Secrets(cfg.Namespace).Delete(ctx, "hollow-node-kubeconfig", metav1.DeleteOptions{})
+	if err != nil {
+		logWarn(fmt.Sprintf("Failed to delete kubeconfig secret: %v", err))
+	}
+
+	// Delete service account
+	logInfo("Deleting service account hollow-node")
+	err = clients.clientset.CoreV1().ServiceAccounts(cfg.Namespace).Delete(ctx, "hollow-node", metav1.DeleteOptions{})
+	if err != nil {
+		logWarn(fmt.Sprintf("Failed to delete service account: %v", err))
+	}
+
+	// Delete cluster role binding
+	logInfo("Deleting cluster role binding hollow-node-binding")
+	err = clients.clientset.RbacV1().ClusterRoleBindings().Delete(ctx, "hollow-node-binding", metav1.DeleteOptions{})
+	if err != nil {
+		logWarn(fmt.Sprintf("Failed to delete cluster role binding: %v", err))
+	}
+
+	// Optionally delete the namespace if it's empty (only if it's the test namespace)
+	if cfg.Namespace == cfgpkg.DefaultNamespace {
+		logInfo(fmt.Sprintf("Deleting namespace %s", cfg.Namespace))
+		err = clients.clientset.CoreV1().Namespaces().Delete(ctx, cfg.Namespace, metav1.DeleteOptions{})
+		if err != nil {
+			logWarn(fmt.Sprintf("Failed to delete namespace %s: %v", cfg.Namespace, err))
+		}
+	}
+
+	logInfo("Comprehensive cleanup completed")
 	return nil
 }
 
@@ -371,6 +411,16 @@ func createKubeconfigSecret(ctx context.Context, clients *Clients, cfg *cfgpkg.C
 		return fmt.Errorf("loading kubeconfig: %w", err)
 	}
 
+	// Get the internal kubernetes service IP since DNS resolution may not be available
+	kubernetesService, err := clients.clientset.CoreV1().Services("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get kubernetes service: %w", err)
+	}
+
+	// Use internal kubernetes service IP for hollow nodes
+	// This allows hollow nodes to connect from inside the cluster without DNS
+	serverHost := fmt.Sprintf("https://%s:443", kubernetesService.Spec.ClusterIP)
+
 	// Create kubeconfig content
 	kubeconfigContent := fmt.Sprintf(`apiVersion: v1
 kind: Config
@@ -391,7 +441,7 @@ users:
     token: %s
 `,
 		base64.StdEncoding.EncodeToString(restConfig.CAData),
-		restConfig.Host,
+		serverHost,
 		tokenResponse.Status.Token)
 
 	logInfo(fmt.Sprintf("Creating kubeconfig secret %s", secretName))
