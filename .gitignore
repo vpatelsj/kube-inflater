@@ -1,0 +1,10 @@
+# Build artifacts
+/bin/
+
+# Performance reports
+api-performance-*.md
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
