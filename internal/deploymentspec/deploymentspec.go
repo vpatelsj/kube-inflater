@@ -69,29 +69,39 @@ func MakeHollowDeploymentSpec(cfg *cfgpkg.Config, deploymentNumber int, replicas
 	for i := 0; i < cfg.ContainersPerPod; i++ {
 		containerSuffix := fmt.Sprintf("-%d", i)
 		
+		// Build kubelet args (avoid port collisions by disabling serving ports for index > 0)
+		kubeletArgs := []string{
+			fmt.Sprintf("-log-file=/var/log/kubelet-$(POD_NAME)%s.log", containerSuffix),
+			"-also-stdout=true",
+			"/kubemark",
+			"--morph=kubelet",
+			fmt.Sprintf("--name=$(POD_NAME)%s", containerSuffix), // Unique node name per container
+			"--kubeconfig=/kubeconfig/kubeconfig",
+			fmt.Sprintf("--node-labels=kubemark=true,incremental-test=true,deployment=deployment-%d,container-index=%d", deploymentNumber, i),
+			"--max-pods=110",
+			"--use-host-image-service=false",
+			fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
+			"--node-status-update-frequency=" + cfg.NodeStatusFreq,
+			"--node-status-report-frequency=15m",
+		}
+
+		// Option 3 selected: only first kubelet (index 0) keeps default secure port, disable all ports for others.
+		if i == 0 {
+			// Disable read-only port; keep default secure port (10250) for the first kubelet.
+			kubeletArgs = append(kubeletArgs, "--kubelet-read-only-port=0")
+		} else {
+			// Disable both secure and read-only ports for extra kubelets to avoid bind conflicts.
+			kubeletArgs = append(kubeletArgs, "--kubelet-port=0", "--kubelet-read-only-port=0")
+		}
+		kubeletArgs = append(kubeletArgs, "--v=4")
+
 		// Kubelet container for this node
 		kubeletContainer := corev1.Container{
-			Name:    fmt.Sprintf("hollow-kubelet%s", containerSuffix),
-			Image:   cfg.KubemarkImage,
-			Env:     append(dynamicEnv, corev1.EnvVar{Name: "CONTAINER_INDEX", Value: fmt.Sprintf("%d", i)}),
-			Command: []string{"/go-runner"},
-			Args: []string{
-				fmt.Sprintf("-log-file=/var/log/kubelet-$(POD_NAME)%s.log", containerSuffix),
-				"-also-stdout=true",
-				"/kubemark",
-				"--morph=kubelet",
-				fmt.Sprintf("--name=$(POD_NAME)%s", containerSuffix), // Unique node name per container
-				"--kubeconfig=/kubeconfig/kubeconfig",
-				fmt.Sprintf("--node-labels=kubemark=true,incremental-test=true,deployment=deployment-%d,container-index=%d", deploymentNumber, i),
-				"--max-pods=110",
-				"--use-host-image-service=false",
-				fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
-				"--node-status-update-frequency=" + cfg.NodeStatusFreq,
-				"--node-status-report-frequency=15m",
-				fmt.Sprintf("--kubelet-port=%d", 10250+i*2),           // Unique port per container
-				fmt.Sprintf("--kubelet-read-only-port=%d", 10255+i*2), // Unique read-only port per container
-				"--v=4",
-			},
+			Name:         fmt.Sprintf("hollow-kubelet%s", containerSuffix),
+			Image:        cfg.KubemarkImage,
+			Env:          append(dynamicEnv, corev1.EnvVar{Name: "CONTAINER_INDEX", Value: fmt.Sprintf("%d", i)}),
+			Command:      []string{"/go-runner"},
+			Args:         kubeletArgs,
 			VolumeMounts: kubeconfigMounts,
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
