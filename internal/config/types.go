@@ -4,12 +4,13 @@ import "time"
 
 // Defaults for CLI values
 const (
-	DefaultNodesToAdd        = 10
-	DefaultWaitTimeoutSec    = 3000
-	DefaultPerfWaitSec       = 30
-	DefaultPerfTests         = 5
-	DefaultKubemarkImage     = "k3sacr1.azurecr.io/kubemark:node-heartbeat-optimized-latest"
-	DefaultNamespace         = "kubemark-incremental-test"
+	DefaultNodesToAdd           = 10
+	DefaultWaitTimeoutSec       = 3000
+	DefaultPerfWaitSec          = 30
+	DefaultPerfTests            = 5
+	DefaultKubemarkImage        = "k3sacr1.azurecr.io/kubemark:node-heartbeat-optimized-latest"
+	DefaultNamespace            = "kubemark-incremental-test"
+	DefaultContainersPerPod     = 5
 )
 
 // DefaultTokenAudiences lists common API server audiences for SA tokens.
@@ -25,6 +26,7 @@ type Config struct {
 	NodeLeaseDuration int
 	NodeMonitorGrace  string
 	Namespace         string
+	ContainersPerPod  int
 	// TokenAudiences configures the audiences used when requesting a ServiceAccount token
 	// for the hollow-node kubeconfig. If empty, DefaultTokenAudiences is used.
 	TokenAudiences []string

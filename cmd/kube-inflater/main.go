@@ -53,6 +53,7 @@ func loadConfigFromFlags() *cfgpkg.Config {
 		NodeStatusFreq:    getenvStr("NODE_STATUS_UPDATE_FREQUENCY", "60s"),
 		NodeLeaseDuration: getenvInt("NODE_LEASE_DURATION", 120),
 		NodeMonitorGrace:  getenvStr("NODE_MONITOR_GRACE_PERIOD", "240s"),
+		ContainersPerPod:  getenvInt("CONTAINERS_PER_POD", cfgpkg.DefaultContainersPerPod),
 		Namespace:         cfgpkg.DefaultNamespace,
 		TokenAudiences:    cfgpkg.DefaultTokenAudiences,
 	}
@@ -68,6 +69,7 @@ func loadConfigFromFlags() *cfgpkg.Config {
 	flag.StringVar(&cfg.NodeStatusFreq, "node-status-frequency", cfg.NodeStatusFreq, "Kubelet node status update frequency")
 	flag.IntVar(&cfg.NodeLeaseDuration, "node-lease-duration", cfg.NodeLeaseDuration, "Node lease duration (seconds)")
 	flag.StringVar(&cfg.NodeMonitorGrace, "node-monitor-grace", cfg.NodeMonitorGrace, "Node monitor grace period")
+	flag.IntVar(&cfg.ContainersPerPod, "containers-per-pod", cfg.ContainersPerPod, "Number of kubemark containers (nodes) per pod")
 	cleanupOnly := flag.Bool("cleanup-only", false, "Only cleanup test resources and exit")
 	tokenAudCSV := getenvStr("TOKEN_AUDIENCES", strings.Join(cfg.TokenAudiences, ","))
 	tokenAudStr := tokenAudCSV
@@ -521,16 +523,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	logInfo(fmt.Sprintf("[PUMP] Will create deployment hollow-nodes-%d with %d replicas", deploymentNumber, cfg.NodesToAdd))
+	// Calculate replicas needed based on containers per pod
+	// Each pod will create cfg.ContainersPerPod hollow nodes
+	replicasNeeded := (cfg.NodesToAdd + cfg.ContainersPerPod - 1) / cfg.ContainersPerPod // Round up division
+	actualNodesCreated := replicasNeeded * cfg.ContainersPerPod
+
+	logInfo(fmt.Sprintf("[PUMP] Will create deployment hollow-nodes-%d with %d replicas (%d containers per pod = %d total nodes)", 
+		deploymentNumber, replicasNeeded, cfg.ContainersPerPod, actualNodesCreated))
 
 	// Create the deployment
-	if err := createDeployment(ctx, clients, cfg, deploymentNumber, cfg.NodesToAdd); err != nil {
+	if err := createDeployment(ctx, clients, cfg, deploymentNumber, replicasNeeded); err != nil {
 		logErr(fmt.Sprintf("Failed to create deployment: %v", err))
 		os.Exit(1)
 	}
 
-	// Wait for nodes to be ready
-	if err := waitForNodes(ctx, clients, cfg, cfg.NodesToAdd); err != nil {
+	// Wait for nodes to be ready (use actual nodes that will be created)
+	if err := waitForNodes(ctx, clients, cfg, actualNodesCreated); err != nil {
 		logErr(fmt.Sprintf("Failed waiting for nodes: %v", err))
 		os.Exit(1)
 	}

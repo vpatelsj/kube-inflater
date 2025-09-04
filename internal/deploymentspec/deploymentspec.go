@@ -64,65 +64,76 @@ func MakeHollowDeploymentSpec(cfg *cfgpkg.Config, deploymentNumber int, replicas
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 	}
 
-	// Main containers with direct binary execution
-	kubeletContainer := corev1.Container{
-		Name:    "hollow-kubelet",
-		Image:   cfg.KubemarkImage,
-		Env:     dynamicEnv,
-		Command: []string{"/go-runner"},
-		Args: []string{
-			"-log-file=/var/log/kubelet-$(POD_NAME).log",
-			"-also-stdout=true",
-			"/kubemark",
-			"--morph=kubelet",
-			"--name=$(POD_NAME)", // Use pod name as node name
-			"--kubeconfig=/kubeconfig/kubeconfig",
-			fmt.Sprintf("--node-labels=kubemark=true,incremental-test=true,deployment=deployment-%d", deploymentNumber),
-			"--max-pods=110",
-			"--use-host-image-service=false",
-			fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
-			"--node-status-update-frequency=" + cfg.NodeStatusFreq,
-			"--node-status-report-frequency=15m",
-			"--v=4",
-		},
-		VolumeMounts: kubeconfigMounts,
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("20m"),
-				corev1.ResourceMemory: resource.MustParse("50Mi"),
+	// Create multiple containers per pod based on configuration
+	var containers []corev1.Container
+	for i := 0; i < cfg.ContainersPerPod; i++ {
+		containerSuffix := fmt.Sprintf("-%d", i)
+		
+		// Kubelet container for this node
+		kubeletContainer := corev1.Container{
+			Name:    fmt.Sprintf("hollow-kubelet%s", containerSuffix),
+			Image:   cfg.KubemarkImage,
+			Env:     append(dynamicEnv, corev1.EnvVar{Name: "CONTAINER_INDEX", Value: fmt.Sprintf("%d", i)}),
+			Command: []string{"/go-runner"},
+			Args: []string{
+				fmt.Sprintf("-log-file=/var/log/kubelet-$(POD_NAME)%s.log", containerSuffix),
+				"-also-stdout=true",
+				"/kubemark",
+				"--morph=kubelet",
+				fmt.Sprintf("--name=$(POD_NAME)%s", containerSuffix), // Unique node name per container
+				"--kubeconfig=/kubeconfig/kubeconfig",
+				fmt.Sprintf("--node-labels=kubemark=true,incremental-test=true,deployment=deployment-%d,container-index=%d", deploymentNumber, i),
+				"--max-pods=110",
+				"--use-host-image-service=false",
+				fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
+				"--node-status-update-frequency=" + cfg.NodeStatusFreq,
+				"--node-status-report-frequency=15m",
+				fmt.Sprintf("--kubelet-port=%d", 10250+i*2),           // Unique port per container
+				fmt.Sprintf("--kubelet-read-only-port=%d", 10255+i*2), // Unique read-only port per container
+				"--v=4",
 			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("200Mi"),
+			VolumeMounts: kubeconfigMounts,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("20m"),
+					corev1.ResourceMemory: resource.MustParse("50Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("200Mi"),
+				},
 			},
-		},
-	}
+		}
 
-	proxyContainer := corev1.Container{
-		Name:    "hollow-proxy",
-		Image:   cfg.KubemarkImage,
-		Env:     dynamicEnv,
-		Command: []string{"/go-runner"},
-		Args: []string{
-			"-log-file=/var/log/kubeproxy-$(POD_NAME).log",
-			"-also-stdout=true",
-			"/kubemark",
-			"--morph=proxy",
-			"--name=$(POD_NAME)", // Use pod name as node name
-			"--kubeconfig=/kubeconfig/kubeconfig",
-			"--v=4",
-		},
-		VolumeMounts: kubeconfigMounts,
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("25Mi"),
+		// Proxy container for this node
+		proxyContainer := corev1.Container{
+			Name:    fmt.Sprintf("hollow-proxy%s", containerSuffix),
+			Image:   cfg.KubemarkImage,
+			Env:     append(dynamicEnv, corev1.EnvVar{Name: "CONTAINER_INDEX", Value: fmt.Sprintf("%d", i)}),
+			Command: []string{"/go-runner"},
+			Args: []string{
+				fmt.Sprintf("-log-file=/var/log/kubeproxy-$(POD_NAME)%s.log", containerSuffix),
+				"-also-stdout=true",
+				"/kubemark",
+				"--morph=proxy",
+				fmt.Sprintf("--name=$(POD_NAME)%s", containerSuffix), // Unique node name per container
+				"--kubeconfig=/kubeconfig/kubeconfig",
+				"--v=4",
 			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("50m"),
-				corev1.ResourceMemory: resource.MustParse("100Mi"),
+			VolumeMounts: kubeconfigMounts,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("10m"),
+					corev1.ResourceMemory: resource.MustParse("25Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("50m"),
+					corev1.ResourceMemory: resource.MustParse("100Mi"),
+				},
 			},
-		},
+		}
+
+		containers = append(containers, kubeletContainer, proxyContainer)
 	}
 
 	deployment := &appsv1.Deployment{
@@ -173,7 +184,7 @@ func MakeHollowDeploymentSpec(cfg *cfgpkg.Config, deploymentNumber int, replicas
 						},
 					},
 					Volumes:       vols,
-					Containers:    []corev1.Container{kubeletContainer, proxyContainer},
+					Containers:    containers,
 					RestartPolicy: corev1.RestartPolicyAlways,
 				},
 			},
