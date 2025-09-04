@@ -14,17 +14,18 @@ import (
 
 // MakeHollowDaemonSetSpec builds a DaemonSet running hollow kubelet/proxy containers.
 // Each pod spawns `containersPerPod` hollow nodes (each node = kubelet+proxy container pair).
-func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, containersPerPod int) *appsv1.DaemonSet {
-    name := "hollow-nodes"
+func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, name string, containersPerPod int) *appsv1.DaemonSet {
 
     labels := map[string]string{
         "app": "hollow-node",
         "kind": "daemonset",
+        "run-id": name,
     }
 
     podLabels := map[string]string{
         "app": "hollow-node",
         "kind": "daemonset",
+        "run-id": name,
     }
 
     vols := []corev1.Volume{
@@ -58,6 +59,7 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, containersPerPod int) *appsv1.D
     for i := 0; i < containersPerPod; i++ {
         suffix := fmt.Sprintf("-%d", i)
 
+        nodeLabels := fmt.Sprintf("kubemark=true,incremental-test=true,daemonset=true,container-index=%d,run-id=%s", i, name)
         kubeletArgs := []string{
             fmt.Sprintf("-log-file=/var/log/kubelet-$(POD_NAME)%s.log", suffix),
             "-also-stdout=true",
@@ -65,7 +67,7 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, containersPerPod int) *appsv1.D
             "--morph=kubelet",
             fmt.Sprintf("--name=$(POD_NAME)%s", suffix),
             "--kubeconfig=/kubeconfig/kubeconfig",
-            fmt.Sprintf("--node-labels=kubemark=true,incremental-test=true,daemonset=true,container-index=%d", i),
+            fmt.Sprintf("--node-labels=%s", nodeLabels),
             "--max-pods=110",
             "--use-host-image-service=false",
             fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
@@ -86,7 +88,7 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, containersPerPod int) *appsv1.D
             Command:      []string{"/go-runner"},
             Args:         kubeletArgs,
             VolumeMounts: kubeconfigMounts,
-            Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("50Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("200Mi")}},
+            Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("50Mi")}},
         }
 
         proxyContainer := corev1.Container{
@@ -96,7 +98,7 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, containersPerPod int) *appsv1.D
             Command:      []string{"/go-runner"},
             Args:         []string{fmt.Sprintf("-log-file=/var/log/kubeproxy-$(POD_NAME)%s.log", suffix), "-also-stdout=true", "/kubemark", "--morph=proxy", fmt.Sprintf("--name=$(POD_NAME)%s", suffix), "--kubeconfig=/kubeconfig/kubeconfig", "--v=4"},
             VolumeMounts: kubeconfigMounts,
-            Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("25Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("100Mi")}},
+            Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("25Mi")}},
         }
 
         containers = append(containers, kubeletContainer, proxyContainer)

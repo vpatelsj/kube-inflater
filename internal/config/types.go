@@ -27,6 +27,9 @@ type Config struct {
 	NodeMonitorGrace  string
 	Namespace         string
 	ContainersPerPod  int
+	DaemonSetName     string // unique per run unless overridden
+	PrunePrevious     bool   // delete older daemonsets first
+	RetainDaemonSets  int    // number of most recent daemonsets (including new) to retain when pruning
 	// TokenAudiences configures the audiences used when requesting a ServiceAccount token
 	// for the hollow-node kubeconfig. If empty, DefaultTokenAudiences is used.
 	TokenAudiences []string

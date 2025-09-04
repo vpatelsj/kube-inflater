@@ -55,9 +55,9 @@ func MakeHollowPodSpec(cfg *cfgpkg.Config, batch int, idx int) *corev1.Pod {
 		Volumes: vols,
 		Containers: []corev1.Container{
 			{Name: "hollow-kubelet", Image: cfg.KubemarkImage, Env: env, Command: kubeletArgs, VolumeMounts: mounts,
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("50Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("200Mi")}}},
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("50Mi")}}},
 			{Name: "hollow-proxy", Image: cfg.KubemarkImage, Env: env, Command: proxyArgs, VolumeMounts: mounts,
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("25Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("100Mi")}}},
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("25Mi")}}},
 		},
 		RestartPolicy: corev1.RestartPolicyAlways,
 	}}

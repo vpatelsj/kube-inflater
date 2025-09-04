@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"math/rand"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -67,6 +69,11 @@ func loadConfigFromFlags() *cfgpkg.Config {
 	flag.IntVar(&cfg.NodeLeaseDuration, "node-lease-duration", cfg.NodeLeaseDuration, "Node lease duration (seconds)")
 	flag.StringVar(&cfg.NodeMonitorGrace, "node-monitor-grace", cfg.NodeMonitorGrace, "Node monitor grace period")
 	flag.IntVar(&cfg.ContainersPerPod, "containers-per-pod", cfg.ContainersPerPod, "Number of kubemark containers (nodes) per pod")
+	flag.StringVar(&cfg.DaemonSetName, "daemonset-name", cfg.DaemonSetName, "Name for the hollow node daemonset (auto-generated if empty)")
+	flag.BoolVar(&cfg.PrunePrevious, "prune-previous", false, "Prune older hollow-node daemonsets before creating a new one")
+	retain := 1
+	flag.IntVar(&retain, "retain-daemonsets", retain, "Number of most recent hollow-node daemonsets to retain (includes the one being created). Use 0 to delete all previous.")
+	flag.BoolVar(&cfg.PrunePrevious, "prune-previous", true, "Delete previous hollow-node daemonsets before creating a new one")
 	flag.BoolVar(&cfg.CleanupOnly, "cleanup-only", false, "Only cleanup test resources and exit")
 	tokenAudCSV := getenvStr("TOKEN_AUDIENCES", strings.Join(cfg.TokenAudiences, ","))
 	tokenAudStr := tokenAudCSV
@@ -75,6 +82,13 @@ func loadConfigFromFlags() *cfgpkg.Config {
 
 	cfg.WaitTimeout = time.Duration(timeoutSec) * time.Second
 	cfg.PerfWait = time.Duration(perfWaitSec) * time.Second
+
+	if cfg.DaemonSetName == "" {
+		ts := time.Now().UTC().Format("20060102-150405")
+		suffix := rand.Intn(10000)
+		cfg.DaemonSetName = fmt.Sprintf("hollow-nodes-%s-%04d", ts, suffix)
+	}
+	cfg.RetainDaemonSets = retain
 
 	// Parse token audiences
 	if tokenAudStr != "" {
@@ -136,7 +150,24 @@ func logPerf(msg string) {
 
 // Find the next deployment number by checking existing deployments
 func createDaemonSet(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
-	ds := daemonsetspec.MakeHollowDaemonSetSpec(cfg, cfg.ContainersPerPod)
+	if cfg.PrunePrevious {
+		list, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=hollow-node"})
+		if err == nil {
+			sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time) })
+			keep := cfg.RetainDaemonSets - 1
+			if keep < 0 { keep = 0 }
+			countKept := 0
+			for _, ds := range list.Items {
+				if ds.Name == cfg.DaemonSetName { continue }
+				if countKept < keep { countKept++; continue }
+				logInfo(fmt.Sprintf("Pruning old daemonset %s", ds.Name))
+				_ = clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Delete(ctx, ds.Name, metav1.DeleteOptions{})
+			}
+		} else {
+			logWarn(fmt.Sprintf("Failed listing daemonsets for pruning: %v", err))
+		}
+	}
+	ds := daemonsetspec.MakeHollowDaemonSetSpec(cfg, cfg.DaemonSetName, cfg.ContainersPerPod)
 	logInfo(fmt.Sprintf("Creating daemonset %s (containersPerPod=%d)", ds.Name, cfg.ContainersPerPod))
 	_, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Create(ctx, ds, metav1.CreateOptions{})
 	if err != nil {
@@ -151,7 +182,7 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 	logInfo("Waiting for hollow nodes (DaemonSet expected = pods * containers-per-pod)...")
 	var lastExpected int
 	for time.Now().Before(deadline) {
-		ds, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Get(ctx, "hollow-nodes", metav1.GetOptions{})
+		ds, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Get(ctx, cfg.DaemonSetName, metav1.GetOptions{})
 		expected := 0
 		if err == nil {
 			pods := int(ds.Status.DesiredNumberScheduled)
