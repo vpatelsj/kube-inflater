@@ -4,7 +4,6 @@ import "time"
 
 // Defaults for CLI values
 const (
-	DefaultNodesToAdd           = 10
 	DefaultWaitTimeoutSec       = 3000
 	DefaultPerfWaitSec          = 30
 	DefaultPerfTests            = 5
@@ -17,7 +16,8 @@ const (
 var DefaultTokenAudiences = []string{"https://kubernetes.default.svc", "kubernetes", "k3s", "kube-apiserver", "api"}
 
 type Config struct {
-	NodesToAdd        int
+	StrictTarget      bool
+	AutoExpected      bool
 	WaitTimeout       time.Duration
 	PerfWait          time.Duration
 	PerfTests         int
@@ -32,4 +32,6 @@ type Config struct {
 	TokenAudiences []string
 	// SkipPerfTests disables performance measurements entirely
 	SkipPerfTests bool
+	// CleanupOnly triggers resource cleanup and exit
+	CleanupOnly bool
 }
