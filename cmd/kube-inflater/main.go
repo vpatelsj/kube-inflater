@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
-	"math/rand"
 	"sort"
 	"strings"
 	"syscall"
@@ -162,9 +162,13 @@ func createDaemonSet(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) 
 		list, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=hollow-node"})
 		if err == nil {
 			// Sort by creation timestamp descending (newest first)
-			sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time) })
+			sort.Slice(list.Items, func(i, j int) bool {
+				return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time)
+			})
 			keep := cfg.RetainDaemonSets - 1 // minus the new one we will create
-			if keep < 0 { keep = 0 }
+			if keep < 0 {
+				keep = 0
+			}
 			countKept := 0
 			for _, ds := range list.Items {
 				if ds.Name == cfg.DaemonSetName { // safety; unlikely since new name
@@ -196,7 +200,11 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 	logInfo("🎈 Inflating cluster (DaemonSet mode). Node count derives from daemonset pods * containers-per-pod.")
 	var lastExpected int
 	for time.Now().Before(deadline) {
-		select { case <-ctx.Done(): return ctx.Err(); default: }
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		// derive expected purely from daemonset
 		expected := 0
 		ds, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Get(ctx, cfg.DaemonSetName, metav1.GetOptions{})
@@ -206,7 +214,9 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 			if pods == 0 {
 				pods = int(ds.Status.CurrentNumberScheduled)
 			}
-			if pods > 0 { expected = pods * cfg.ContainersPerPod }
+			if pods > 0 {
+				expected = pods * cfg.ContainersPerPod
+			}
 		}
 		if expected != lastExpected {
 			logInfo(fmt.Sprintf("[INFLATE] Expected hollow nodes (pods * containersPerPod): %d", expected))
@@ -222,7 +232,9 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 			logInfo(fmt.Sprintf("[INFLATE] Ready hollow nodes: %d / %d", readyCount, expected))
 		} else if readyCount > 0 {
 			// If we already see hollow nodes but expected is still 0, just log transient state once
-			if lastExpected == 0 { logInfo(fmt.Sprintf("[INFLATE] Hollow nodes registering (%d) before daemonset expectation calculated...", readyCount)) }
+			if lastExpected == 0 {
+				logInfo(fmt.Sprintf("[INFLATE] Hollow nodes registering (%d) before daemonset expectation calculated...", readyCount))
+			}
 		}
 		if expected > 0 && readyCount >= expected {
 			logInfo("🎈 [FULL] All expected hollow nodes registered")
@@ -247,7 +259,9 @@ func runPerformanceTests(ctx context.Context, clients *Clients, cfg *cfgpkg.Conf
 			logInfo("Performance wait cancelled")
 			return
 		case <-time.After(1 * time.Second):
-			if time.Now().After(deadline) { goto PERFSTART }
+			if time.Now().After(deadline) {
+				goto PERFSTART
+			}
 		}
 	}
 

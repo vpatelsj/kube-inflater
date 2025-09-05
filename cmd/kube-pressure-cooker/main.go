@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
-	"math/rand"
 	"sort"
 	"strings"
 	"syscall"
@@ -153,13 +153,22 @@ func createDaemonSet(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) 
 	if cfg.PrunePrevious {
 		list, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=hollow-node"})
 		if err == nil {
-			sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time) })
+			sort.Slice(list.Items, func(i, j int) bool {
+				return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time)
+			})
 			keep := cfg.RetainDaemonSets - 1
-			if keep < 0 { keep = 0 }
+			if keep < 0 {
+				keep = 0
+			}
 			countKept := 0
 			for _, ds := range list.Items {
-				if ds.Name == cfg.DaemonSetName { continue }
-				if countKept < keep { countKept++; continue }
+				if ds.Name == cfg.DaemonSetName {
+					continue
+				}
+				if countKept < keep {
+					countKept++
+					continue
+				}
 				logInfo(fmt.Sprintf("Pruning old daemonset %s", ds.Name))
 				_ = clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Delete(ctx, ds.Name, metav1.DeleteOptions{})
 			}
@@ -186,16 +195,25 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 		expected := 0
 		if err == nil {
 			pods := int(ds.Status.DesiredNumberScheduled)
-			if pods > 0 { expected = pods * cfg.ContainersPerPod }
+			if pods > 0 {
+				expected = pods * cfg.ContainersPerPod
+			}
 		}
 		if expected != lastExpected {
 			logInfo(fmt.Sprintf("Expected hollow nodes: %d", expected))
 			lastExpected = expected
 		}
 		_, readyCount, err := nodes.ListKubemarkNodes(ctx, clients.clientset)
-		if err != nil { logWarn(fmt.Sprintf("Failed to list nodes: %v", err)); time.Sleep(5 * time.Second); continue }
+		if err != nil {
+			logWarn(fmt.Sprintf("Failed to list nodes: %v", err))
+			time.Sleep(5 * time.Second)
+			continue
+		}
 		logInfo(fmt.Sprintf("Ready hollow nodes: %d / %d", readyCount, expected))
-		if expected > 0 && readyCount >= expected { logInfo("All expected hollow nodes are ready"); return nil }
+		if expected > 0 && readyCount >= expected {
+			logInfo("All expected hollow nodes are ready")
+			return nil
+		}
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("timeout waiting for nodes to become ready")
