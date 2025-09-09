@@ -5,9 +5,10 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
-	"strconv"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -21,7 +22,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	cfgpkg "kube-inflater/internal/config"
-	"kube-inflater/internal/deploymentspec"
+	"kube-inflater/internal/daemonsetspec"
 	"kube-inflater/internal/nodes"
 )
 
@@ -45,7 +46,6 @@ func getenvStr(key, def string) string {
 
 func loadConfigFromFlags() *cfgpkg.Config {
 	cfg := &cfgpkg.Config{
-		NodesToAdd:        getenvInt("NODES_TO_ADD", cfgpkg.DefaultNodesToAdd),
 		WaitTimeout:       time.Duration(getenvInt("WAIT_TIMEOUT", cfgpkg.DefaultWaitTimeoutSec)) * time.Second,
 		PerfWait:          time.Duration(getenvInt("PERFORMANCE_WAIT", cfgpkg.DefaultPerfWaitSec)) * time.Second,
 		PerfTests:         getenvInt("PERFORMANCE_TESTS", cfgpkg.DefaultPerfTests),
@@ -53,6 +53,7 @@ func loadConfigFromFlags() *cfgpkg.Config {
 		NodeStatusFreq:    getenvStr("NODE_STATUS_UPDATE_FREQUENCY", "60s"),
 		NodeLeaseDuration: getenvInt("NODE_LEASE_DURATION", 120),
 		NodeMonitorGrace:  getenvStr("NODE_MONITOR_GRACE_PERIOD", "240s"),
+		ContainersPerPod:  getenvInt("CONTAINERS_PER_POD", cfgpkg.DefaultContainersPerPod),
 		Namespace:         cfgpkg.DefaultNamespace,
 		TokenAudiences:    cfgpkg.DefaultTokenAudiences,
 	}
@@ -60,7 +61,6 @@ func loadConfigFromFlags() *cfgpkg.Config {
 	timeoutSec := int(cfg.WaitTimeout / time.Second)
 	perfWaitSec := int(cfg.PerfWait / time.Second)
 
-	flag.IntVar(&cfg.NodesToAdd, "nodes-to-add", cfg.NodesToAdd, "Number of nodes to add")
 	flag.IntVar(&timeoutSec, "timeout", timeoutSec, "Seconds to wait for nodes to become ready")
 	flag.IntVar(&perfWaitSec, "perf-wait", perfWaitSec, "Seconds to wait after deployment before measuring performance")
 	flag.IntVar(&cfg.PerfTests, "perf-tests", cfg.PerfTests, "Number of API calls to test for performance measurement")
@@ -68,7 +68,13 @@ func loadConfigFromFlags() *cfgpkg.Config {
 	flag.StringVar(&cfg.NodeStatusFreq, "node-status-frequency", cfg.NodeStatusFreq, "Kubelet node status update frequency")
 	flag.IntVar(&cfg.NodeLeaseDuration, "node-lease-duration", cfg.NodeLeaseDuration, "Node lease duration (seconds)")
 	flag.StringVar(&cfg.NodeMonitorGrace, "node-monitor-grace", cfg.NodeMonitorGrace, "Node monitor grace period")
-	cleanupOnly := flag.Bool("cleanup-only", false, "Only cleanup test resources and exit")
+	flag.IntVar(&cfg.ContainersPerPod, "containers-per-pod", cfg.ContainersPerPod, "Number of kubemark containers (nodes) per pod")
+	flag.StringVar(&cfg.DaemonSetName, "daemonset-name", cfg.DaemonSetName, "Name for the hollow node daemonset (auto-generated if empty)")
+	flag.BoolVar(&cfg.PrunePrevious, "prune-previous", false, "Prune older hollow-node daemonsets before creating a new one")
+	retain := 1
+	flag.IntVar(&retain, "retain-daemonsets", retain, "Number of most recent hollow-node daemonsets to retain (includes the one being created). Use 0 to delete all previous.")
+	flag.BoolVar(&cfg.PrunePrevious, "prune-previous", true, "Delete previous hollow-node daemonsets before creating a new one")
+	flag.BoolVar(&cfg.CleanupOnly, "cleanup-only", false, "Only cleanup test resources and exit")
 	tokenAudCSV := getenvStr("TOKEN_AUDIENCES", strings.Join(cfg.TokenAudiences, ","))
 	tokenAudStr := tokenAudCSV
 	flag.StringVar(&tokenAudStr, "token-audiences", tokenAudStr, "Comma-separated ServiceAccount token audiences for hollow-node kubeconfig")
@@ -76,6 +82,13 @@ func loadConfigFromFlags() *cfgpkg.Config {
 
 	cfg.WaitTimeout = time.Duration(timeoutSec) * time.Second
 	cfg.PerfWait = time.Duration(perfWaitSec) * time.Second
+
+	if cfg.DaemonSetName == "" {
+		ts := time.Now().UTC().Format("20060102-150405")
+		suffix := rand.Intn(10000)
+		cfg.DaemonSetName = fmt.Sprintf("hollow-nodes-%s-%04d", ts, suffix)
+	}
+	cfg.RetainDaemonSets = retain
 
 	// Parse token audiences
 	if tokenAudStr != "" {
@@ -86,10 +99,6 @@ func loadConfigFromFlags() *cfgpkg.Config {
 				cfg.TokenAudiences = append(cfg.TokenAudiences, p)
 			}
 		}
-	}
-
-	if *cleanupOnly {
-		cfg.NodesToAdd = 0
 	}
 
 	return cfg
@@ -140,64 +149,73 @@ func logPerf(msg string) {
 }
 
 // Find the next deployment number by checking existing deployments
-func findNextDeploymentNumber(ctx context.Context, clients *Clients, namespace string) (int, error) {
-	deployments, err := clients.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=hollow-node",
-	})
-	if err != nil {
-		return 1, fmt.Errorf("listing existing deployments: %w", err)
-	}
-
-	maxNum := 0
-	for _, deploy := range deployments.Items {
-		name := deploy.Name
-		if strings.HasPrefix(name, "hollow-nodes-") {
-			numStr := strings.TrimPrefix(name, "hollow-nodes-")
-			if num, err := strconv.Atoi(numStr); err == nil && num > maxNum {
-				maxNum = num
+func createDaemonSet(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
+	if cfg.PrunePrevious {
+		list, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=hollow-node"})
+		if err == nil {
+			sort.Slice(list.Items, func(i, j int) bool {
+				return list.Items[i].CreationTimestamp.Time.After(list.Items[j].CreationTimestamp.Time)
+			})
+			keep := cfg.RetainDaemonSets - 1
+			if keep < 0 {
+				keep = 0
 			}
+			countKept := 0
+			for _, ds := range list.Items {
+				if ds.Name == cfg.DaemonSetName {
+					continue
+				}
+				if countKept < keep {
+					countKept++
+					continue
+				}
+				logInfo(fmt.Sprintf("Pruning old daemonset %s", ds.Name))
+				_ = clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Delete(ctx, ds.Name, metav1.DeleteOptions{})
+			}
+		} else {
+			logWarn(fmt.Sprintf("Failed listing daemonsets for pruning: %v", err))
 		}
 	}
-
-	return maxNum + 1, nil
-}
-
-func createDeployment(ctx context.Context, clients *Clients, cfg *cfgpkg.Config, deploymentNumber, replicas int) error {
-	deployment := deploymentspec.MakeHollowDeploymentSpec(cfg, deploymentNumber, replicas)
-
-	logInfo(fmt.Sprintf("Creating deployment %s with %d replicas", deployment.Name, replicas))
-
-	_, err := clients.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	ds := daemonsetspec.MakeHollowDaemonSetSpec(cfg, cfg.DaemonSetName, cfg.ContainersPerPod)
+	logInfo(fmt.Sprintf("Creating daemonset %s (containersPerPod=%d)", ds.Name, cfg.ContainersPerPod))
+	_, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Create(ctx, ds, metav1.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("creating deployment: %w", err)
+		return fmt.Errorf("creating daemonset: %w", err)
 	}
-
-	logInfo(fmt.Sprintf("Successfully created deployment %s", deployment.Name))
+	logInfo("Successfully created daemonset")
 	return nil
 }
 
-func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config, expectedCount int) error {
-	logInfo(fmt.Sprintf("Waiting for %d hollow nodes to become ready...", expectedCount))
-
+func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
 	deadline := time.Now().Add(cfg.WaitTimeout)
+	logInfo("Waiting for hollow nodes (DaemonSet expected = pods * containers-per-pod)...")
+	var lastExpected int
 	for time.Now().Before(deadline) {
+		ds, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Get(ctx, cfg.DaemonSetName, metav1.GetOptions{})
+		expected := 0
+		if err == nil {
+			pods := int(ds.Status.DesiredNumberScheduled)
+			if pods > 0 {
+				expected = pods * cfg.ContainersPerPod
+			}
+		}
+		if expected != lastExpected {
+			logInfo(fmt.Sprintf("Expected hollow nodes: %d", expected))
+			lastExpected = expected
+		}
 		_, readyCount, err := nodes.ListKubemarkNodes(ctx, clients.clientset)
 		if err != nil {
 			logWarn(fmt.Sprintf("Failed to list nodes: %v", err))
 			time.Sleep(5 * time.Second)
 			continue
 		}
-
-		logInfo(fmt.Sprintf("Ready nodes: %d/%d", readyCount, expectedCount))
-
-		if readyCount >= expectedCount {
-			logInfo("All nodes are ready!")
+		logInfo(fmt.Sprintf("Ready hollow nodes: %d / %d", readyCount, expected))
+		if expected > 0 && readyCount >= expected {
+			logInfo("All expected hollow nodes are ready")
 			return nil
 		}
-
 		time.Sleep(10 * time.Second)
 	}
-
 	return fmt.Errorf("timeout waiting for nodes to become ready")
 }
 
@@ -223,7 +241,7 @@ func runPerformanceTests(ctx context.Context, clients *Clients, cfg *cfgpkg.Conf
 	elapsed := time.Since(start)
 	avgMs := float64(elapsed.Milliseconds()) / float64(cfg.PerfTests)
 
-	logPerf(fmt.Sprintf("Performance Results:"))
+	logPerf("Performance Results:")
 	logPerf(fmt.Sprintf("  Total time: %v", elapsed))
 	logPerf(fmt.Sprintf("  Average per call: %.2fms", avgMs))
 }
@@ -231,18 +249,15 @@ func runPerformanceTests(ctx context.Context, clients *Clients, cfg *cfgpkg.Conf
 func cleanupResources(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
 	logInfo("Starting cleanup of test resources...")
 
-	// Delete deployments
-	deployments, err := clients.clientset.AppsV1().Deployments(cfg.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=hollow-node",
-	})
+	// Delete daemonsets
+	daemonsets, err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "app=hollow-node"})
 	if err != nil {
-		logWarn(fmt.Sprintf("Failed to list deployments for cleanup: %v", err))
+		logWarn(fmt.Sprintf("Failed to list daemonsets for cleanup: %v", err))
 	} else {
-		for _, deploy := range deployments.Items {
-			logInfo(fmt.Sprintf("Deleting deployment %s", deploy.Name))
-			err := clients.clientset.AppsV1().Deployments(cfg.Namespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
-			if err != nil {
-				logWarn(fmt.Sprintf("Failed to delete deployment %s: %v", deploy.Name, err))
+		for _, ds := range daemonsets.Items {
+			logInfo(fmt.Sprintf("Deleting daemonset %s", ds.Name))
+			if err := clients.clientset.AppsV1().DaemonSets(cfg.Namespace).Delete(ctx, ds.Name, metav1.DeleteOptions{}); err != nil {
+				logWarn(fmt.Sprintf("Failed to delete daemonset %s: %v", ds.Name, err))
 			}
 		}
 	}
@@ -418,7 +433,7 @@ func main() {
 	cfg := loadConfigFromFlags()
 
 	logInfo("🎈 Starting kube-inflater - expanding your cluster capacity!")
-	logInfo(fmt.Sprintf("Configuration: NodesToAdd=%d, Timeout=%v", cfg.NodesToAdd, cfg.WaitTimeout))
+	logInfo(fmt.Sprintf("Configuration: Timeout=%v", cfg.WaitTimeout))
 
 	clients, err := buildClients(cfg)
 	if err != nil {
@@ -439,7 +454,7 @@ func main() {
 	}()
 
 	// Cleanup and exit if requested
-	if cfg.NodesToAdd == 0 {
+	if cfg.CleanupOnly {
 		err := cleanupResources(ctx, clients, cfg)
 		if err != nil {
 			logErr(fmt.Sprintf("Cleanup failed: %v", err))
@@ -464,23 +479,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Find next deployment number
-	deploymentNumber, err := findNextDeploymentNumber(ctx, clients, cfg.Namespace)
-	if err != nil {
-		logErr(fmt.Sprintf("Failed to find next deployment number: %v", err))
+	if err := createDaemonSet(ctx, clients, cfg); err != nil {
+		logErr(fmt.Sprintf("Failed to create daemonset: %v", err))
 		os.Exit(1)
 	}
-
-	logInfo(fmt.Sprintf("Will create deployment hollow-nodes-%d with %d replicas", deploymentNumber, cfg.NodesToAdd))
-
-	// Create the deployment
-	if err := createDeployment(ctx, clients, cfg, deploymentNumber, cfg.NodesToAdd); err != nil {
-		logErr(fmt.Sprintf("Failed to create deployment: %v", err))
-		os.Exit(1)
-	}
-
-	// Wait for nodes to be ready
-	if err := waitForNodes(ctx, clients, cfg, cfg.NodesToAdd); err != nil {
+	if err := waitForNodes(ctx, clients, cfg); err != nil {
 		logErr(fmt.Sprintf("Failed waiting for nodes: %v", err))
 		os.Exit(1)
 	}

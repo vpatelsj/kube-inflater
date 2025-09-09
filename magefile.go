@@ -200,6 +200,78 @@ func CleanupNodes() error {
 	return nil
 }
 
+// EtcdTester builds the etcd-tester binary
+func EtcdTester() error {
+	fmt.Println("==> Building etcd-tester 🔧")
+
+	// Build the etcd-tester tool
+	outDir := filepath.Join(".", "bin")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+
+	etcdTesterPath := filepath.Join("etcd-tester", "etcd-tester.go")
+	
+	// Set environment and build
+	cmd := exec.Command("go", "build", "-mod=mod", "-o", filepath.Join(outDir, "etcd-tester"), etcdTesterPath)
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	fmt.Println("✅ Built bin/etcd-tester - etcd connectivity and performance tester")
+	fmt.Println("Usage examples:")
+	fmt.Println("    ./bin/etcd-tester http://localhost:2379")
+	fmt.Println("    ./bin/etcd-tester https://etcd.example.com:2379")
+	return nil
+}
+
+// EtcdPerfTest builds the etcd performance test binary
+func EtcdPerfTest() error {
+	fmt.Println("==> Building etcd perf-test 🚀")
+
+	// Build the perf-test tool
+	outDir := filepath.Join(".", "bin")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+
+	perfTestPath := filepath.Join("etcd-tester", "perf-test.go")
+	
+	// Set environment and build
+	cmd := exec.Command("go", "build", "-mod=mod", "-o", filepath.Join(outDir, "etcd-perf-test"), perfTestPath)
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	fmt.Println("✅ Built bin/etcd-perf-test - etcd performance benchmarking tool")
+	fmt.Println("Usage examples:")
+	fmt.Println("    ./bin/etcd-perf-test http://localhost:2379")
+	fmt.Println("    ./bin/etcd-perf-test https://etcd.example.com:2379")
+	return nil
+}
+
+// EtcdTools builds both etcd-tester and etcd-perf-test binaries
+func EtcdTools() error {
+	fmt.Println("==> Building all etcd tools 🔧🚀")
+	
+	if err := EtcdTester(); err != nil {
+		return err
+	}
+	
+	if err := EtcdPerfTest(); err != nil {
+		return err
+	}
+	
+	fmt.Println("✅ Built all etcd tools successfully!")
+	return nil
+}
+
 // getAzureACRCredentials attempts to get ACR credentials using Azure CLI
 func getAzureACRCredentials(registryName string, username, password *string) error {
 	// Check if Azure CLI is available

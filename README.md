@@ -112,6 +112,7 @@ This is particularly useful for:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--nodes-to-add` | Number of nodes to add | 10 |
+| `--containers-per-pod` | Number of kubemark containers (nodes) per pod | 5 |
 | `--timeout` | Seconds to wait for nodes to become ready | 3000 |
 | `--perf-wait` | Seconds to wait before measuring performance | 30 |
 | `--perf-tests` | Number of API calls to test for performance | 5 |
@@ -122,7 +123,7 @@ This is particularly useful for:
 | `--node-monitor-grace` | Node monitor grace period | "240s" |
 | `--token-audiences` | ServiceAccount token audiences | Default K8s audiences |
 
-Environment variables are supported using uppercase names with underscores (e.g., `NODES_TO_ADD`, `TIMEOUT`).
+Environment variables are supported using uppercase names with underscores (e.g., `NODES_TO_ADD`, `CONTAINERS_PER_POD`, `TIMEOUT`).
 
 ## Container Image
 
@@ -135,13 +136,13 @@ The tool uses the optimized kubemark image from Azure Container Registry:
 
 ### Small Test (Development)
 ```bash
-# Quick test with 5 nodes
+# Quick test with 5 nodes (default: 1 pod with 5 containers)
 ./bin/kube-inflater --nodes-to-add 5 --perf-wait 10 --perf-tests 3
 ```
 
 ### Medium Scale Test
 ```bash
-# Test with 50 nodes
+# Test with 50 nodes (default: 10 pods with 5 containers each)
 ./bin/kube-inflater --nodes-to-add 50
 ```
 
@@ -149,6 +150,15 @@ The tool uses the optimized kubemark image from Azure Container Registry:
 ```bash
 # Scale test with 200 nodes and extended timeout
 ./bin/kube-inflater --nodes-to-add 200 --timeout 1800
+```
+
+### Custom Containers Per Pod
+```bash
+# Use fewer containers per pod for better pod distribution
+./bin/kube-inflater --nodes-to-add 20 --containers-per-pod 2
+
+# Use more containers per pod for higher density
+./bin/kube-inflater --nodes-to-add 100 --containers-per-pod 10
 ```
 
 ### Skip Performance Testing
