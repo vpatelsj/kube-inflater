@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1494,6 +1495,12 @@ func (t *EtcdTester) testPerformanceBasic() TestResult {
 }
 
 func main() {
+	// Check if this is a performance test command
+	if len(os.Args) > 1 && os.Args[1] == "perf" {
+		runPerfCommand()
+		return
+	}
+
 	// Default configuration
 	config := &TestConfig{
 		Endpoints:   []string{"localhost:2379"},
@@ -1555,5 +1562,42 @@ func main() {
 		if !result.Success {
 			os.Exit(1)
 		}
+	}
+}
+
+func runPerfCommand() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: etcd-tester perf <etcd-endpoint> [node-count] [duration-minutes]")
+		fmt.Println("Example: etcd-tester perf localhost:2379 100 5")
+		fmt.Println("Example: etcd-tester perf localhost:2379 100 0  (run indefinitely until Ctrl+C)")
+		os.Exit(1)
+	}
+
+	endpoint := os.Args[2]
+	nodeCount := 100
+	durationMinutes := 5
+
+	if len(os.Args) >= 4 {
+		if count, err := strconv.Atoi(os.Args[3]); err == nil {
+			nodeCount = count
+		}
+	}
+
+	if len(os.Args) >= 5 {
+		if mins, err := strconv.Atoi(os.Args[4]); err == nil {
+			durationMinutes = mins
+		}
+	}
+
+	duration := time.Duration(durationMinutes) * time.Minute
+	if durationMinutes == 0 {
+		fmt.Printf("Starting etcd node performance test with %d nodes against %s (run indefinitely - press Ctrl+C to stop)\n", nodeCount, endpoint)
+	} else {
+		fmt.Printf("Starting etcd node performance test with %d nodes against %s for %v (press Ctrl+C to stop early)\n", nodeCount, endpoint, duration)
+	}
+
+	if err := RunNodePerfTest(endpoint, nodeCount, duration); err != nil {
+		fmt.Printf("Performance test failed: %v\n", err)
+		os.Exit(1)
 	}
 }

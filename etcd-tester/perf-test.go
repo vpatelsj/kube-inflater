@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
-	"strconv"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
-	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -84,7 +83,11 @@ func (npt *NodePerfTest) generateNodeInfo(index int) *NodeInfo {
 }
 
 func (npt *NodePerfTest) createNodeLease(ctx context.Context, node *NodeInfo) error {
-	lease, err := npt.client.Grant(ctx, 60) // 60 second lease
+	// Use shorter timeout for individual operations
+	opCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	lease, err := npt.client.Grant(opCtx, 300) // 300 second (5 minute) lease
 	if err != nil {
 		npt.metrics.IncrementCounter(&npt.metrics.Errors)
 		return fmt.Errorf("failed to create lease for node %s: %v", node.Name, err)
@@ -165,7 +168,11 @@ func (npt *NodePerfTest) registerNode(ctx context.Context, node *NodeInfo) error
 	nodeKey := fmt.Sprintf("/registry/nodes/%s", node.Name)
 	nodeJSON, _ := json.Marshal(nodeData)
 
-	_, err := npt.client.Put(ctx, nodeKey, string(nodeJSON), clientv3.WithLease(node.LeaseID))
+	// Use shorter timeout for individual operations
+	opCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	_, err := npt.client.Put(opCtx, nodeKey, string(nodeJSON), clientv3.WithLease(node.LeaseID))
 	if err != nil {
 		npt.metrics.IncrementCounter(&npt.metrics.Errors)
 		return fmt.Errorf("failed to register node %s: %v", node.Name, err)
@@ -180,11 +187,16 @@ func (npt *NodePerfTest) sendHeartbeat(ctx context.Context, node *NodeInfo) erro
 	node.LastSeen = time.Now()
 	node.mutex.Unlock()
 
+	// Use shorter timeout for individual operations
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	// Renew lease
-	_, err := npt.client.KeepAliveOnce(ctx, node.LeaseID)
+	_, err := npt.client.KeepAliveOnce(opCtx, node.LeaseID)
 	if err != nil {
 		npt.metrics.IncrementCounter(&npt.metrics.Errors)
-		return fmt.Errorf("failed to send heartbeat for node %s: %v", node.Name, err)
+		// Don't return error to avoid stopping the lifecycle, just increment error counter
+		return nil
 	}
 
 	npt.metrics.IncrementCounter(&npt.metrics.HeartbeatsSent)
@@ -215,10 +227,16 @@ func (npt *NodePerfTest) updateNodeStatus(ctx context.Context, node *NodeInfo) e
 	}
 
 	statusJSON, _ := json.Marshal(statusData)
-	_, err := npt.client.Put(ctx, statusKey, string(statusJSON))
+	
+	// Use shorter timeout for individual operations
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err := npt.client.Put(opCtx, statusKey, string(statusJSON))
 	if err != nil {
 		npt.metrics.IncrementCounter(&npt.metrics.Errors)
-		return fmt.Errorf("failed to update status for node %s: %v", node.Name, err)
+		// Don't return error to avoid stopping the lifecycle, just increment error counter
+		return nil
 	}
 
 	npt.metrics.IncrementCounter(&npt.metrics.StatusUpdates)
@@ -282,13 +300,9 @@ func (npt *NodePerfTest) nodeLifecycle(ctx context.Context, node *NodeInfo) {
 		case <-ctx.Done():
 			return
 		case <-heartbeatTicker.C:
-			if err := npt.sendHeartbeat(ctx, node); err != nil {
-				log.Printf("Heartbeat error for %s: %v", node.Name, err)
-			}
+			npt.sendHeartbeat(ctx, node)
 		case <-statusTicker.C:
-			if err := npt.updateNodeStatus(ctx, node); err != nil {
-				log.Printf("Status update error for %s: %v", node.Name, err)
-			}
+			npt.updateNodeStatus(ctx, node)
 		}
 	}
 }
@@ -301,41 +315,29 @@ func (npt *NodePerfTest) watchNodes(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case watchResp := <-watchChan:
-			for _, event := range watchResp.Events {
+			for range watchResp.Events {
 				npt.metrics.IncrementCounter(&npt.metrics.WatchEvents)
-				if event.Type == mvccpb.PUT {
-					log.Printf("Watch: Node %s updated", string(event.Kv.Key))
-				} else if event.Type == mvccpb.DELETE {
-					log.Printf("Watch: Node %s deleted", string(event.Kv.Key))
-				}
 			}
 		}
 	}
 }
 
 func (npt *NodePerfTest) printMetrics() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-npt.ctx.Done():
+			fmt.Print("\n") // Move to next line when stopping
 			return
 		case <-ticker.C:
 			created, deleted, heartbeats, statusUpdates, watchEvents, errors, totalOps, duration := npt.metrics.GetStats()
 			opsPerSecond := float64(totalOps) / duration.Seconds()
 
-			fmt.Printf("\n=== Performance Metrics (%.1fs) ===\n", duration.Seconds())
-			fmt.Printf("Active Nodes: %d\n", len(npt.nodes))
-			fmt.Printf("Nodes Created: %d\n", created)
-			fmt.Printf("Nodes Deleted: %d\n", deleted)
-			fmt.Printf("Heartbeats Sent: %d\n", heartbeats)
-			fmt.Printf("Status Updates: %d\n", statusUpdates)
-			fmt.Printf("Watch Events: %d\n", watchEvents)
-			fmt.Printf("Errors: %d\n", errors)
-			fmt.Printf("Total Operations: %d\n", totalOps)
-			fmt.Printf("Operations/Second: %.2f\n", opsPerSecond)
-			fmt.Printf("=======================================\n")
+			// Single line status update that overwrites itself
+			fmt.Printf("\rNodes: %d | Created: %d | Deleted: %d | Heartbeats: %d | Status: %d | Watch: %d | Errors: %d | Ops/s: %.1f | Runtime: %.0fs",
+				len(npt.nodes), created, deleted, heartbeats, statusUpdates, watchEvents, errors, opsPerSecond, duration.Seconds())
 		}
 	}
 }
@@ -349,8 +351,11 @@ func (npt *NodePerfTest) Run() error {
 	// Start metrics printing
 	go npt.printMetrics()
 
+	fmt.Print("Creating nodes...")
+
 	// Create initial nodes
 	var wg sync.WaitGroup
+	var nodesMutex sync.Mutex
 	semaphore := make(chan struct{}, 10) // Limit concurrent node creation
 
 	for i := 0; i < npt.nodeCount; i++ {
@@ -362,11 +367,13 @@ func (npt *NodePerfTest) Run() error {
 
 			node := npt.generateNodeInfo(index + 1)
 			if err := npt.registerNode(npt.ctx, node); err != nil {
-				log.Printf("Failed to register node %s: %v", node.Name, err)
 				return
 			}
 
+			// Thread-safe append to nodes slice
+			nodesMutex.Lock()
 			npt.nodes = append(npt.nodes, node)
+			nodesMutex.Unlock()
 
 			// Start lifecycle for this node
 			go npt.nodeLifecycle(npt.ctx, node)
@@ -375,7 +382,8 @@ func (npt *NodePerfTest) Run() error {
 
 	// Wait for all nodes to be created
 	wg.Wait()
-	fmt.Printf("Successfully created %d nodes\n", len(npt.nodes))
+	fmt.Printf(" done! Created %d nodes.\n", len(npt.nodes))
+	fmt.Println("Performance test running... Press Ctrl+C to stop.")
 
 	// Start node churn simulation
 	go npt.simulateNodeChurn(npt.ctx)
@@ -386,7 +394,7 @@ func (npt *NodePerfTest) Run() error {
 }
 
 func (npt *NodePerfTest) Stop() {
-	fmt.Println("Stopping performance test...")
+	fmt.Print("\nStopping performance test...")
 	npt.cancel()
 
 	// Clean up all nodes
@@ -394,49 +402,57 @@ func (npt *NodePerfTest) Stop() {
 		nodeKey := fmt.Sprintf("/registry/nodes/%s", node.Name)
 		npt.client.Delete(context.Background(), nodeKey)
 	}
-	fmt.Println("Cleanup completed")
+	fmt.Println(" cleanup completed")
 }
 
-func runPerfTest(endpoint string, nodeCount int) error {
+// RunNodePerfTest runs a performance test against etcd with the specified configuration
+func RunNodePerfTest(endpoint string, nodeCount int, duration time.Duration) error {
+	fmt.Printf("Connecting to etcd at %s...\n", endpoint)
+	
 	client, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{endpoint},
-		DialTimeout: 10 * time.Second,
+		DialTimeout: 30 * time.Second, // Increased timeout for remote servers
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to etcd: %v", err)
 	}
 	defer client.Close()
 
+	// Test the connection before starting performance test
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	fmt.Print("Testing connection...")
+	_, err = client.Get(ctx, "/test-connection")
+	if err != nil {
+		fmt.Printf(" failed!\n")
+		return fmt.Errorf("failed to test etcd connection: %v", err)
+	}
+	fmt.Printf(" connected successfully!\n")
+
 	perfTest := NewNodePerfTest(client, nodeCount)
 
-	// Handle graceful shutdown
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Handle graceful shutdown on signal
 	go func() {
-		time.Sleep(300 * time.Second) // Run for 5 minutes by default
+		<-sigChan
+		fmt.Print("\nReceived interrupt signal...")
 		perfTest.Stop()
 	}()
+
+	// Optional: Handle duration-based shutdown if duration > 0
+	if duration > 0 {
+		go func() {
+			time.Sleep(duration)
+			fmt.Printf("\nDuration %v completed...", duration)
+			perfTest.Stop()
+		}()
+	}
 
 	return perfTest.Run()
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run perf-test.go <etcd-endpoint> [node-count]")
-		fmt.Println("Example: go run perf-test.go localhost:2379 100")
-		os.Exit(1)
-	}
 
-	endpoint := os.Args[1]
-	nodeCount := 100
-
-	if len(os.Args) >= 3 {
-		if count, err := strconv.Atoi(os.Args[2]); err == nil {
-			nodeCount = count
-		}
-	}
-
-	fmt.Printf("Starting etcd performance test with %d nodes against %s\n", nodeCount, endpoint)
-
-	if err := runPerfTest(endpoint, nodeCount); err != nil {
-		log.Fatalf("Performance test failed: %v", err)
-	}
-}
