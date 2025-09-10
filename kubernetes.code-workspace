@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "../kubernetes"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}
