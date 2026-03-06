@@ -13,7 +13,7 @@ const (
 )
 
 // DefaultTokenAudiences lists common API server audiences for SA tokens.
-var DefaultTokenAudiences = []string{"https://kubernetes.default.svc", "kubernetes", "k3s", "kube-apiserver", "api"}
+var DefaultTokenAudiences = []string{"https://kubernetes.default.svc.cluster.local", "https://kubernetes.default.svc", "kubernetes", "k3s", "kube-apiserver", "api"}
 
 type Config struct {
 	StrictTarget      bool

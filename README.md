@@ -1,6 +1,6 @@
 # kube-inflater 🎈
 
-A **simplified** Kubernetes scalability exerciser that inflates your cluster with hollow (kubemark) nodes using deployments. Just specify how many nodes to add - the tool automatically handles deployment numbering, waits for readiness, and measures API responsiveness.
+A **simplified** Kubernetes scalability exerciser that inflates your cluster with hollow (kubemark) nodes using DaemonSets. A DaemonSet is scheduled on every eligible node; each pod runs multiple kubemark containers, so the total hollow-node count is `(scheduled pods) × (containers-per-pod)`. The tool waits for readiness and measures API responsiveness.
 
 ## Quick Start
 
@@ -17,14 +17,14 @@ go build -o bin/kube-inflater ./cmd/kube-inflater
 
 ### 2. Inflate Your Cluster! 
 ```bash
-# Inflate cluster with 10 hollow nodes
-./bin/kube-inflater --nodes-to-add 10
+# Inflate cluster with default settings (5 containers per pod on every eligible node)
+./bin/kube-inflater
 
-# Inflate cluster with 25 hollow nodes  
-./bin/kube-inflater --nodes-to-add 25
+# Use 10 kubemark containers per pod for higher hollow-node density
+./bin/kube-inflater --containers-per-pod 10
 
-# Big inflation! Add 100 hollow nodes for large scale testing
-./bin/kube-inflater --nodes-to-add 100
+# Give the daemonset a specific name
+./bin/kube-inflater --daemonset-name my-test-run
 ```
 
 ### 3. Generate Performance Report (Optional)
@@ -48,24 +48,24 @@ go build -o bin/kube-inflater ./cmd/kube-inflater
 
 The tool automatically:
 
-1. **Finds Next Deployment Number**: Scans existing deployments and creates `hollow-nodes-N` (where N is auto-incremented)
-2. **Creates Single Deployment**: One deployment with the specified number of replicas  
-3. **Inflates Cluster**: Monitors nodes until they're ready and cluster is fully inflated
+1. **Creates DaemonSet**: A DaemonSet named `hollow-nodes-<timestamp>-<suffix>` (or a custom name via `--daemonset-name`) is deployed to the `kubemark-incremental-test` namespace
+2. **Schedules on Eligible Nodes**: The DaemonSet schedules a pod on every eligible node; each pod runs `--containers-per-pod` kubemark containers
+3. **Inflates Cluster**: Monitors hollow node registration until all expected nodes (`pods × containers-per-pod`) are ready
 4. **Measures Performance**: Tests API response times under inflated load
 5. **Reports Results**: Shows timing and node status
 
 Example run:
 ```
 🎈 [INFO] Starting kube-inflater - expanding your cluster capacity!
-[INFO] Configuration: NodesToAdd=10, Timeout=50m0s
-[PUMP] Will create deployment hollow-nodes-3 with 10 replicas
-[PUMP] Creating deployment hollow-nodes-3 with 10 replicas  
-[PUMP] Successfully created deployment hollow-nodes-3
-[INFLATE] Inflating cluster with 10 hollow nodes...
-[INFLATE] Ready nodes: 10/10
-🎈 [FULL] Cluster fully inflated! All nodes ready!
-[GAUGE] Performance Results:
-[GAUGE]   Average per call: 85.30ms
+[INFO] Configuration: Timeout=50m0s ContainersPerPod=5
+[INFO] Creating daemonset hollow-nodes-20260306-143012-0042 (containersPerPod=5)
+[INFO] Successfully created daemonset
+[INFO] 🎈 Inflating cluster (DaemonSet mode). Node count derives from daemonset pods * containers-per-pod.
+[INFO] [INFLATE] Expected hollow nodes (pods * containersPerPod): 15
+[INFO] [INFLATE] Ready hollow nodes: 15 / 15
+[INFO] 🎈 [FULL] All expected hollow nodes registered
+🎈 [GAUGE] Performance Results:
+🎈 [GAUGE]   Average per call: 85.30ms
 🎈 [INFO] kube-inflater completed successfully! Cluster fully inflated!
 ```
 
@@ -111,19 +111,22 @@ This is particularly useful for:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--nodes-to-add` | Number of nodes to add | 10 |
 | `--containers-per-pod` | Number of kubemark containers (nodes) per pod | 5 |
+| `--daemonset-name` | Name for the hollow node daemonset | Auto-generated |
 | `--timeout` | Seconds to wait for nodes to become ready | 3000 |
 | `--perf-wait` | Seconds to wait before measuring performance | 30 |
 | `--perf-tests` | Number of API calls to test for performance | 5 |
 | `--skip-perf-tests` | Skip performance tests entirely | false |
 | `--cleanup-only` | Only cleanup test resources and exit | false |
+| `--prune-previous` | Prune older hollow-node daemonsets before creating a new one | false |
+| `--retain-daemonsets` | Number of most recent daemonsets to retain (includes the new one) | 1 |
+| `--auto-expected` | Compute expected hollow nodes from daemonset pods × containers-per-pod | true |
 | `--node-status-frequency` | Kubelet node status update frequency | "60s" |
 | `--node-lease-duration` | Node lease duration (seconds) | 120 |
 | `--node-monitor-grace` | Node monitor grace period | "240s" |
-| `--token-audiences` | ServiceAccount token audiences | Default K8s audiences |
+| `--token-audiences` | Comma-separated ServiceAccount token audiences | Default K8s audiences |
 
-Environment variables are supported using uppercase names with underscores (e.g., `NODES_TO_ADD`, `CONTAINERS_PER_POD`, `TIMEOUT`).
+Environment variables are supported using uppercase names with underscores (e.g., `CONTAINERS_PER_POD`, `TIMEOUT`).
 
 ## Container Image
 
@@ -136,57 +139,58 @@ The tool uses the optimized kubemark image from Azure Container Registry:
 
 ### Small Test (Development)
 ```bash
-# Quick test with 5 nodes (default: 1 pod with 5 containers)
-./bin/kube-inflater --nodes-to-add 5 --perf-wait 10 --perf-tests 3
+# Quick test with default 5 containers per pod, short perf wait
+./bin/kube-inflater --perf-wait 10 --perf-tests 3
 ```
 
-### Medium Scale Test
+### Higher Density
 ```bash
-# Test with 50 nodes (default: 10 pods with 5 containers each)
-./bin/kube-inflater --nodes-to-add 50
+# Use more containers per pod for higher hollow-node density
+./bin/kube-inflater --containers-per-pod 10
 ```
 
-### Large Scale Test
+### Lower Density
 ```bash
-# Scale test with 200 nodes and extended timeout
-./bin/kube-inflater --nodes-to-add 200 --timeout 1800
+# Use fewer containers per pod for lighter per-node load
+./bin/kube-inflater --containers-per-pod 2
 ```
 
-### Custom Containers Per Pod
+### Extended Timeout for Large Clusters
 ```bash
-# Use fewer containers per pod for better pod distribution
-./bin/kube-inflater --nodes-to-add 20 --containers-per-pod 2
-
-# Use more containers per pod for higher density
-./bin/kube-inflater --nodes-to-add 100 --containers-per-pod 10
+# Allow more time for all nodes to register
+./bin/kube-inflater --timeout 1800
 ```
 
 ### Skip Performance Testing
 ```bash
 # Add nodes without performance testing (faster)
-./bin/kube-inflater --nodes-to-add 30 --skip-perf-tests
+./bin/kube-inflater --skip-perf-tests
+```
+
+### Prune Previous Runs
+```bash
+# Delete older daemonsets before creating a new one (retain the latest 2)
+./bin/kube-inflater --prune-previous --retain-daemonsets 2
 ```
 
 ## Monitoring & Output
 
 The tool provides real-time progress updates:
 
-- **🏗️ Deployment Creation**: Shows which deployment is being created
+- **🏗️ DaemonSet Creation**: Shows which daemonset is being created
 - **⏳ Node Readiness**: Live count of ready nodes vs. expected
 - **📊 Performance Metrics**: API response times and statistics
 - **✅ Success Confirmation**: Clear completion status
 
-Example deployment pattern:
+Example pattern:
 ```
-Run 1: Creates hollow-nodes-1 (10 replicas)
-Run 2: Creates hollow-nodes-2 (15 replicas) 
-Run 3: Creates hollow-nodes-3 (20 replicas)
-...and so on
+Run 1: Creates hollow-nodes-20260306-143012-0042 (5 containers per pod on each eligible node)
+Run 2: Creates hollow-nodes-20260306-150000-1234 (same or different containers-per-pod)
 ```
 
-Check your deployments:
+Check your daemonsets:
 ```bash
-kubectl get deployments -n kubemark-incremental-test
+kubectl get daemonsets -n kubemark-incremental-test
 kubectl get pods -n kubemark-incremental-test
 kubectl get nodes -l kubemark=true
 ```
@@ -247,17 +251,17 @@ kubectl describe pod -n kubemark-incremental-test <pod-name>
 The simplified tool consists of focused modules:
 
 - **`cmd/kube-inflater/main.go`**: Main CLI application with simple orchestration
-- **`internal/config/types.go`**: Simple configuration with just `NodesToAdd` field
-- **`internal/deploymentspec/`**: Kubernetes Deployment specs for hollow nodes  
+- **`internal/config/types.go`**: Simple configuration with DaemonSet and performance settings
+- **`internal/daemonsetspec/`**: Kubernetes DaemonSet specs for hollow nodes  
 - **`internal/nodes/`**: Node listing and management via client-go
 - **`internal/naming/`**: Node naming utilities
 - **`internal/perf/`** & **`internal/perfv2/`**: Performance measurement
 
 ### Key Design Principles
 
-- **🎯 Simplicity First**: One parameter (`--nodes-to-add`) does everything
-- **🔢 Auto-increment**: Smart deployment numbering without user intervention  
-- **📦 Deployment-based**: Uses Kubernetes Deployments for reliability
+- **🎯 Simplicity First**: Deploy a DaemonSet and let Kubernetes schedule across eligible nodes
+- **🔢 Auto-generated Names**: Unique daemonset names with timestamp + random suffix  
+- **📦 DaemonSet-based**: Uses Kubernetes DaemonSets for automatic node-level scheduling
 - **🚀 Anonymous Pull**: No registry authentication required
 - **⚡ Direct Execution**: No shell dependencies, pure Go binary execution
 
