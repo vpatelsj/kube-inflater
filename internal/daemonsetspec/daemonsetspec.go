@@ -53,7 +53,10 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, name string, containersPerPod i
 	}
 
 	// Environment vars common to all containers in a pod
-	dynamicEnv := []corev1.EnvVar{{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}}
+	dynamicEnv := []corev1.EnvVar{
+		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
+	}
 
 	var containers []corev1.Container
 	for i := 0; i < containersPerPod; i++ {
@@ -65,15 +68,13 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, name string, containersPerPod i
 			"-also-stdout=true",
 			"/kubemark",
 			"--morph=kubelet",
-			fmt.Sprintf("--name=$(POD_NAME)%s", suffix),
+			fmt.Sprintf("--name=$(NODE_NAME)-%s%s", name, suffix),
 			"--kubeconfig=/kubeconfig/kubeconfig",
 			fmt.Sprintf("--node-labels=%s", nodeLabels),
 			"--max-pods=110",
 			"--use-host-image-service=false",
-			fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
-			"--node-status-update-frequency=" + cfg.NodeStatusFreq,
-			"--node-status-report-frequency=15m",
 		}
+		kubeletArgs = append(kubeletArgs, "--disable-csi-plugins=true")
 		if i == 0 {
 			kubeletArgs = append(kubeletArgs, "--kubelet-read-only-port=0")
 		} else {
@@ -96,7 +97,7 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, name string, containersPerPod i
 			Image:        cfg.KubemarkImage,
 			Env:          append(append([]corev1.EnvVar{}, dynamicEnv...), corev1.EnvVar{Name: "CONTAINER_INDEX", Value: fmt.Sprintf("%d", i)}),
 			Command:      []string{"/go-runner"},
-			Args:         []string{fmt.Sprintf("-log-file=/var/log/kubeproxy-$(POD_NAME)%s.log", suffix), "-also-stdout=true", "/kubemark", "--morph=proxy", fmt.Sprintf("--name=$(POD_NAME)%s", suffix), "--kubeconfig=/kubeconfig/kubeconfig", "--v=4"},
+			Args:         []string{fmt.Sprintf("-log-file=/var/log/kubeproxy-$(POD_NAME)%s.log", suffix), "-also-stdout=true", "/kubemark", "--morph=proxy", fmt.Sprintf("--name=$(NODE_NAME)-%s%s", name, suffix), "--kubeconfig=/kubeconfig/kubeconfig", "--v=4"},
 			VolumeMounts: kubeconfigMounts,
 			Resources:    corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("25Mi")}},
 		}

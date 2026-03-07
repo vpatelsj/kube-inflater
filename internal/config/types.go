@@ -7,7 +7,7 @@ const (
 	DefaultWaitTimeoutSec   = 3000
 	DefaultPerfWaitSec      = 30
 	DefaultPerfTests        = 5
-	DefaultKubemarkImage    = "k3sacr1.azurecr.io/kubemark:node-heartbeat-optimized-latest"
+	DefaultKubemarkImage    = "k3sacr1.azurecr.io/kubemark:disable-csi"
 	DefaultNamespace        = "kubemark-incremental-test"
 	DefaultContainersPerPod = 5
 )
