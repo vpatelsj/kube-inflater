@@ -222,14 +222,15 @@ func waitForNodes(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) err
 			logInfo(fmt.Sprintf("[INFLATE] Expected hollow nodes (pods * containersPerPod): %d", expected))
 			lastExpected = expected
 		}
-		_, readyCount, err := nodes.ListKubemarkNodesForRun(ctx, clients.clientset, cfg.DaemonSetName)
+		allNames, readyCount, err := nodes.ListKubemarkNodesForRun(ctx, clients.clientset, cfg.DaemonSetName)
 		if err != nil {
 			logWarn(fmt.Sprintf("Failed to list nodes: %v", err))
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		registered := len(allNames)
 		if expected > 0 {
-			logInfo(fmt.Sprintf("[INFLATE] Ready hollow nodes: %d / %d", readyCount, expected))
+			logInfo(fmt.Sprintf("[INFLATE] Ready hollow nodes: %d / %d (registered: %d)", readyCount, expected, registered))
 		} else if readyCount > 0 {
 			// If we already see hollow nodes but expected is still 0, just log transient state once
 			if lastExpected == 0 {
