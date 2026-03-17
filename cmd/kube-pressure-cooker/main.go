@@ -355,11 +355,8 @@ func ensureServiceAccount(ctx context.Context, clients *Clients, cfg *cfgpkg.Con
 func createKubeconfigSecret(ctx context.Context, clients *Clients, cfg *cfgpkg.Config) error {
 	secretName := "hollow-node-kubeconfig"
 
-	// Check if secret already exists
-	_, err := clients.clientset.CoreV1().Secrets(cfg.Namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err == nil {
-		return nil // Secret exists
-	}
+	// Delete existing secret so we always recreate with current token audiences
+	_ = clients.clientset.CoreV1().Secrets(cfg.Namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
 
 	logInfo("Creating ServiceAccount token for kubeconfig")
 
