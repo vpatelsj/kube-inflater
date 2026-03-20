@@ -51,7 +51,7 @@ func loadConfigFromFlags() *cfgpkg.Config {
 		PerfTests:         getenvInt("PERFORMANCE_TESTS", cfgpkg.DefaultPerfTests),
 		KubemarkImage:     getenvStr("KUBEMARK_IMAGE", cfgpkg.DefaultKubemarkImage),
 		NodeStatusFreq:    getenvStr("NODE_STATUS_UPDATE_FREQUENCY", "60s"),
-		NodeLeaseDuration: getenvInt("NODE_LEASE_DURATION", 120),
+		NodeLeaseDuration: getenvInt("NODE_LEASE_DURATION", 240),
 		NodeMonitorGrace:  getenvStr("NODE_MONITOR_GRACE_PERIOD", "240s"),
 		ContainersPerPod:  getenvInt("CONTAINERS_PER_POD", cfgpkg.DefaultContainersPerPod),
 		Namespace:         cfgpkg.DefaultNamespace,

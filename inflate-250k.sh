@@ -9,8 +9,8 @@
 set -euo pipefail
 
 NAMESPACE="kubemark-incremental-test"
-TARGET=250000
-STEP_END=25
+TARGET=300000
+STEP_END=50
 CONTAINERS_PER_POD=10
 INFLATER_DIR="/home/vapa/dev/kube-inflater"
 
@@ -73,7 +73,7 @@ for step in $(seq "$STEP_START" "$STEP_END"); do
 
   ./bin/kube-inflater \
     --containers-per-pod "$CONTAINERS_PER_POD" \
-    --node-lease-duration 120 \
+    --node-lease-duration 240 \
     --node-status-frequency 60s \
     --node-monitor-grace 240s \
     --daemonset-name "$DS_NAME" \

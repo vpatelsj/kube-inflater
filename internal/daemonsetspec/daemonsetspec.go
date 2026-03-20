@@ -75,6 +75,8 @@ func MakeHollowDaemonSetSpec(cfg *cfgpkg.Config, name string, containersPerPod i
 			"--use-host-image-service=false",
 		}
 		kubeletArgs = append(kubeletArgs, "--disable-csi-plugins=true")
+		kubeletArgs = append(kubeletArgs, fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration))
+		kubeletArgs = append(kubeletArgs, "--node-status-update-frequency="+cfg.NodeStatusFreq)
 		if i == 0 {
 			kubeletArgs = append(kubeletArgs, "--kubelet-read-only-port=0")
 		} else {

@@ -4,12 +4,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -47,6 +51,7 @@ func main() {
 	concurrency := flag.Int("concurrency", 10, "number of concurrent deletions (default 10)")
 	delayMs := flag.Int("delay", 10, "delay between deletions in milliseconds (default 10)")
 	disableRateLimit := flag.Bool("disable-rate-limit", false, "disable client-side rate limiting entirely for maximum speed")
+	labelSelector := flag.String("l", "", "delete ALL nodes matching this label selector (e.g. kubemark=true); skips zombie/NotReady classification")
 
 	flag.Parse()
 
@@ -105,6 +110,29 @@ func main() {
 			fmt.Printf("🚨 FORCE MODE: Nodes will be deleted immediately without grace period\n")
 		}
 		fmt.Printf("\n")
+	}
+
+	// Label-selector mode: use a separate client with HTTP/2 disabled to avoid
+	// GOAWAY cascading all in-flight requests when running 100+ concurrent deletes.
+	if *labelSelector != "" {
+		h1Config := rest.CopyConfig(config)
+		h1Config.TLSClientConfig.NextProtos = []string{"http/1.1"}
+		// Force HTTP/1.1 connection pool — one TCP connection per concurrent request.
+		h1Config.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+			if t, ok := rt.(*http.Transport); ok {
+				t.MaxIdleConnsPerHost = *concurrency + 10
+				t.MaxIdleConns = *concurrency + 10
+				t.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+			}
+			return rt
+		})
+		h1Client, err := kubernetes.NewForConfig(h1Config)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating HTTP/1.1 client: %v\n", err)
+			os.Exit(1)
+		}
+		deleteByLabelSelector(ctx, h1Client, *labelSelector, *concurrency, *delayMs, *force, *dryRun)
+		return
 	}
 
 	// Get all pods in the namespace to identify which hollow nodes have corresponding pods
@@ -476,4 +504,130 @@ func main() {
 		}
 		fmt.Printf("%s\n", successMsg)
 	}
+}
+
+// deleteByLabelSelector lists all nodes matching the selector (unpaginated) and
+// deletes them concurrently via a goroutine worker pool.
+func deleteByLabelSelector(ctx context.Context, clientset *kubernetes.Clientset, selector string, concurrency, delayMs int, force, dryRun bool) {
+	fmt.Printf("📋 Listing nodes matching %q (unpaginated) ...\n", selector)
+
+	nodeList, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing nodes: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Extract just the names and release the full node objects
+	nodeNames := make([]string, len(nodeList.Items))
+	for i := range nodeList.Items {
+		nodeNames[i] = nodeList.Items[i].Name
+	}
+	nodeList = nil // allow GC to reclaim
+
+	totalNodes := int64(len(nodeNames))
+	fmt.Printf("📊 Nodes matching %q: %d\n\n", selector, totalNodes)
+
+	if totalNodes == 0 {
+		fmt.Printf("✅ No nodes match selector — nothing to do.\n")
+		return
+	}
+
+	if dryRun {
+		fmt.Printf("✅ DRY RUN complete. %d nodes would be deleted.\n", totalNodes)
+		return
+	}
+
+	if !force {
+		fmt.Printf("⚠️  This will permanently delete %d nodes.\n", totalNodes)
+		fmt.Printf("Press Ctrl+C to cancel or press Enter to continue...")
+		fmt.Scanln()
+	}
+
+	// Prepare delete options
+	deleteOptions := metav1.DeleteOptions{}
+	if force {
+		gracePeriod := int64(0)
+		deleteOptions.GracePeriodSeconds = &gracePeriod
+	}
+
+	// Worker pool
+	nameCh := make(chan string, concurrency*2)
+	var wg sync.WaitGroup
+
+	var deleted int64
+	var errCount int64
+	start := time.Now()
+
+	workers := concurrency
+	if int64(workers) > totalNodes {
+		workers = int(totalNodes)
+	}
+
+	const maxRetries = 3
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range nameCh {
+				var lastErr error
+				ok := false
+				for attempt := 0; attempt < maxRetries; attempt++ {
+					lastErr = clientset.CoreV1().Nodes().Delete(ctx, name, deleteOptions)
+					if lastErr == nil {
+						ok = true
+						break
+					}
+					// "not found" means already deleted — treat as success
+					if apierrors.IsNotFound(lastErr) {
+						ok = true
+						break
+					}
+					// Retry on transient server errors (GOAWAY, 429, 5xx)
+					if apierrors.IsServerTimeout(lastErr) || apierrors.IsTooManyRequests(lastErr) ||
+						apierrors.IsInternalError(lastErr) || apierrors.IsServiceUnavailable(lastErr) {
+						time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+						continue
+					}
+					// Non-retryable error
+					break
+				}
+
+				if ok {
+					cur := atomic.AddInt64(&deleted, 1)
+					if cur%1000 == 0 || cur == totalNodes {
+						elapsed := time.Since(start).Seconds()
+						rate := float64(cur) / elapsed
+						fmt.Printf("Progress: %d/%d (%.0f nodes/sec)\n", cur, totalNodes, rate)
+					}
+				} else {
+					cnt := atomic.AddInt64(&errCount, 1)
+					if cnt <= 5 {
+						fmt.Fprintf(os.Stderr, "❌ %s: %v\n", name, lastErr)
+					}
+				}
+
+				if delayMs > 0 {
+					time.Sleep(time.Duration(delayMs) * time.Millisecond)
+				}
+			}
+		}()
+	}
+
+	// Feed names to workers
+	for _, name := range nodeNames {
+		nameCh <- name
+	}
+	close(nameCh)
+	wg.Wait()
+
+	elapsed := time.Since(start)
+	finalDeleted := atomic.LoadInt64(&deleted)
+	finalErrors := atomic.LoadInt64(&errCount)
+
+	fmt.Printf("\n🎯 Label-selector cleanup complete!\n")
+	fmt.Printf("Deleted: %d  Errors: %d  Elapsed: %s  (%.0f nodes/sec)\n",
+		finalDeleted, finalErrors, elapsed.Round(time.Second), float64(finalDeleted)/elapsed.Seconds())
 }
