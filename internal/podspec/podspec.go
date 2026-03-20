@@ -22,7 +22,6 @@ func MakeHollowPodSpec(cfg *cfgpkg.Config, batch int, idx int) *corev1.Pod {
 		"--morph=kubelet", "--name=" + name, "--kubeconfig=/kubeconfig/kubeconfig",
 		"--node-labels=kubemark=true,incremental-test=true,batch=batch-" + fmt.Sprint(batch),
 		"--max-pods=110", "--use-host-image-service=false",
-		fmt.Sprintf("--node-lease-duration-seconds=%d", cfg.NodeLeaseDuration),
 		"--node-status-update-frequency=" + cfg.NodeStatusFreq,
 		"--node-status-report-frequency=15m", "--v=4"}
 	proxyArgs := []string{"/go-runner", "-log-file=/var/log/kubeproxy-" + name + ".log", "-also-stdout=true", "/kubemark",
