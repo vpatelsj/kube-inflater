@@ -94,6 +94,54 @@ func Clean() error {
 	return os.RemoveAll("bin")
 }
 
+// ResourceInflater builds the kube-resource-inflater binary
+func ResourceInflater() error {
+	fmt.Println("==> Building kube-resource-inflater 🏗️")
+	outDir := filepath.Join(".", "bin")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	if err := run("go", "build", "-o", filepath.Join(outDir, "kube-resource-inflater"), "./cmd/kube-resource-inflater"); err != nil {
+		return err
+	}
+	fmt.Println("==> Built bin/kube-resource-inflater 🏗️")
+	fmt.Println("Usage examples:")
+	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps,secrets --count=1000")
+	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200")
+	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=1000 --watch --watch-connections=50")
+	fmt.Println("    ./bin/kube-resource-inflater --watch-only --watch-types=configmaps --watch-connections=100")
+	fmt.Println("    ./bin/kube-resource-inflater --cleanup-only")
+	fmt.Println("    ./bin/kube-resource-inflater --cleanup-only --run-id=<id>")
+	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=100 --dry-run")
+	return nil
+}
+
+// ResourceInflaterRun builds and runs kube-resource-inflater with args after --
+func ResourceInflaterRun() error {
+	fmt.Println("==> Running kube-resource-inflater 🏗️")
+	bin := filepath.Join(".", "bin", "kube-resource-inflater")
+	if _, err := os.Stat(bin); err != nil {
+		if err := ResourceInflater(); err != nil {
+			return err
+		}
+	}
+	args := os.Args
+	sep := 0
+	for i, a := range args {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	var pass []string
+	if sep > 0 && sep+1 < len(args) {
+		pass = args[sep+1:]
+	}
+	cmd := exec.Command(bin, pass...)
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
+	return cmd.Run()
+}
+
 // PerfReport builds and runs the API performance report generator
 func PerfReport() error {
 	fmt.Println("==> Building and running API performance report generator")
