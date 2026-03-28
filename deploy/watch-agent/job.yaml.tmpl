@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: watch-agent
+  namespace: watch-stress
+spec:
+  parallelism: __REPLICAS__
+  completions: __REPLICAS__
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: watch-agent
+        run-id: "__RUN_ID__"
+    spec:
+      serviceAccountName: watch-agent
+      imagePullSecrets:
+        - name: acr-pull
+      terminationGracePeriodSeconds: 5
+      restartPolicy: Never
+      containers:
+        - name: watch-agent
+          image: __IMAGE__
+          args:
+            - "--connections=__CONNS_PER_POD__"
+            - "--duration=__DURATION__"
+            - "--stagger=__STAGGER__"
+            - "--resource-type=customresources"
+            - "--namespace=stress-test"
+            - "--spread-count=10"
+            - "--qps=1000000"
+            - "--burst=1000000"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 8Gi

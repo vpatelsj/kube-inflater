@@ -1,0 +1,21 @@
+apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: FlowSchema
+metadata:
+  name: watch-agent-exempt
+spec:
+  # Lower number = higher priority. Must be lower than service-accounts (9900)
+  matchingPrecedence: 100
+  priorityLevelConfiguration:
+    name: exempt
+  rules:
+    - subjects:
+        - kind: ServiceAccount
+          serviceAccount:
+            name: watch-agent
+            namespace: watch-stress
+      resourceRules:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          namespaces: ["*"]
+          verbs: ["*"]
+          clusterScope: true

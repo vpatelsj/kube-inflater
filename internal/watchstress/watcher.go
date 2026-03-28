@@ -3,6 +3,7 @@ package watchstress
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,7 @@ func NewWatcher(dynClient dynamic.Interface, cfg Config) *Watcher {
 
 // RunStandalone opens N concurrent watch connections and measures throughput.
 func (w *Watcher) RunStandalone(ctx context.Context) (*Metrics, error) {
-	logInfo(fmt.Sprintf("Starting standalone watch stress: %d connections, duration %v", w.cfg.Connections, w.cfg.Duration))
+	logInfo(fmt.Sprintf("Starting standalone watch stress: %d connections, stagger %v, duration %v", w.cfg.Connections, w.cfg.StaggerDuration, w.cfg.Duration))
 
 	metrics := &Metrics{StartTime: time.Now()}
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.Duration)
@@ -38,16 +39,29 @@ func (w *Watcher) RunStandalone(ctx context.Context) (*Metrics, error) {
 	var reconnects atomic.Int64
 	var errors atomic.Int64
 
+	// Launch all goroutines immediately; each one computes its own stagger delay.
 	for i := 0; i < w.cfg.Connections; i++ {
 		wg.Add(1)
 		typeName := w.cfg.ResourceTypes[i%len(w.cfg.ResourceTypes)]
-		go func(connID int, typeName string) {
+		var delay time.Duration
+		if w.cfg.StaggerDuration > 0 && w.cfg.Connections > 1 {
+			delay = time.Duration(int64(i) * int64(w.cfg.StaggerDuration) / int64(w.cfg.Connections))
+		}
+		go func(connID int, typeName string, staggerDelay time.Duration) {
 			defer wg.Done()
+			// Wait for our turn to avoid thundering herd at watch setup
+			if staggerDelay > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(staggerDelay):
+				}
+			}
 			events, reconn, errs := w.watchLoop(ctx, connID, typeName, metrics)
 			totalEvents.Add(events)
 			reconnects.Add(reconn)
 			errors.Add(errs)
-		}(i, typeName)
+		}(i, typeName, delay)
 	}
 
 	wg.Wait()
@@ -74,22 +88,36 @@ func (w *Watcher) RunCombined(ctx context.Context, watchReady chan<- struct{}) (
 	var reconnects atomic.Int64
 	var errors atomic.Int64
 
-	// Start all watchers
+	// Start watchers in batches to avoid rate limiter stampede
 	readyCount := atomic.Int32{}
-	for i := 0; i < w.cfg.Connections; i++ {
-		wg.Add(1)
-		typeName := w.cfg.ResourceTypes[i%len(w.cfg.ResourceTypes)]
-		go func(connID int, typeName string) {
-			defer wg.Done()
-			readyCount.Add(1)
-			if int(readyCount.Load()) == w.cfg.Connections {
-				close(watchReady)
-			}
-			events, reconn, errs := w.watchLoopWithDelivery(ctx, connID, typeName, metrics)
-			totalEvents.Add(events)
-			reconnects.Add(reconn)
-			errors.Add(errs)
-		}(i, typeName)
+	batchSize := 500
+	if batchSize > w.cfg.Connections {
+		batchSize = w.cfg.Connections
+	}
+	launched := 0
+	for launched < w.cfg.Connections {
+		end := launched + batchSize
+		if end > w.cfg.Connections {
+			end = w.cfg.Connections
+		}
+		for i := launched; i < end; i++ {
+			wg.Add(1)
+			typeName := w.cfg.ResourceTypes[i%len(w.cfg.ResourceTypes)]
+			go func(connID int, typeName string) {
+				defer wg.Done()
+				if int(readyCount.Add(1)) == w.cfg.Connections {
+					close(watchReady)
+				}
+				events, reconn, errs := w.watchLoopWithDelivery(ctx, connID, typeName, metrics)
+				totalEvents.Add(events)
+				reconnects.Add(reconn)
+				errors.Add(errs)
+			}(i, typeName)
+		}
+		launched = end
+		if launched < w.cfg.Connections {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 
 	wg.Wait()
@@ -136,20 +164,23 @@ func (w *Watcher) watchLoop(ctx context.Context, connID int, typeName string, me
 		if watchErr != nil {
 			errors++
 			logWarn(fmt.Sprintf("Watch conn %d: error: %v", connID, watchErr))
+			backoff := time.Duration(1000+rand.Intn(4000)) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Second):
+			case <-time.After(backoff):
 			}
 			reconnects++
 			continue
 		}
 
 		metrics.AddConnectLatency(time.Since(start))
+		metrics.WatchOpened()
 
 		for event := range watcher.ResultChan() {
 			if ctx.Err() != nil {
 				watcher.Stop()
+				metrics.WatchClosed()
 				return
 			}
 			if event.Type == watch.Error {
@@ -159,12 +190,14 @@ func (w *Watcher) watchLoop(ctx context.Context, connID int, typeName string, me
 			events++
 		}
 
-		// ResultChan closed — reconnect
+		metrics.WatchClosed()
+		// ResultChan closed — reconnect with jitter to avoid stampede
 		reconnects++
+		backoff := time.Duration(500+rand.Intn(2500)) * time.Millisecond
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(backoff):
 		}
 	}
 }
@@ -249,6 +282,7 @@ func PrintSummary(s MetricsSummary) {
 	logInfo(fmt.Sprintf("  Duration:            %v", s.Duration))
 	logInfo(fmt.Sprintf("  Total Events:        %d", s.TotalEvents))
 	logInfo(fmt.Sprintf("  Events/sec:          %.1f", s.EventsPerSecond))
+	logInfo(fmt.Sprintf("  Peak Alive Watches:  %d", s.PeakAliveWatches))
 	logInfo(fmt.Sprintf("  Reconnects:          %d", s.Reconnects))
 	logInfo(fmt.Sprintf("  Errors:              %d", s.Errors))
 	if s.AvgConnectLatency > 0 {

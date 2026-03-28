@@ -2,6 +2,7 @@ package watchstress
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,12 +17,13 @@ const (
 
 // Config holds watch stress test configuration.
 type Config struct {
-	Connections   int
-	Duration      time.Duration
-	ResourceTypes []string
-	Mode          Mode
-	Namespace     string // namespace prefix for namespaced resources
-	SpreadCount   int    // number of spread namespaces to watch
+	Connections     int
+	Duration        time.Duration
+	StaggerDuration time.Duration // time over which to spread initial watch setup
+	ResourceTypes   []string
+	Mode            Mode
+	Namespace       string // namespace prefix for namespaced resources
+	SpreadCount     int    // number of spread namespaces to watch
 }
 
 // Metrics collects watch performance data.
@@ -36,6 +38,9 @@ type Metrics struct {
 	Errors                 int64
 	StartTime              time.Time
 	EndTime                time.Time
+
+	aliveWatches     atomic.Int64
+	peakAliveWatches atomic.Int64
 }
 
 // AddConnectLatency records a watch connection establishment latency.
@@ -52,6 +57,22 @@ func (m *Metrics) AddDeliveryLatency(d time.Duration) {
 	m.EventDeliveryLatencies = append(m.EventDeliveryLatencies, d)
 }
 
+// WatchOpened increments the alive watch counter and updates the peak.
+func (m *Metrics) WatchOpened() {
+	cur := m.aliveWatches.Add(1)
+	for {
+		peak := m.peakAliveWatches.Load()
+		if cur <= peak || m.peakAliveWatches.CompareAndSwap(peak, cur) {
+			break
+		}
+	}
+}
+
+// WatchClosed decrements the alive watch counter.
+func (m *Metrics) WatchClosed() {
+	m.aliveWatches.Add(-1)
+}
+
 // Summary computes derived metrics.
 func (m *Metrics) Summary() MetricsSummary {
 	m.mu.Lock()
@@ -63,11 +84,12 @@ func (m *Metrics) Summary() MetricsSummary {
 	}
 
 	s := MetricsSummary{
-		TotalEvents:     m.TotalEvents,
-		EventsPerSecond: float64(m.TotalEvents) / duration,
-		Reconnects:      m.Reconnects,
-		Errors:          m.Errors,
-		Duration:        m.EndTime.Sub(m.StartTime),
+		TotalEvents:      m.TotalEvents,
+		EventsPerSecond:  float64(m.TotalEvents) / duration,
+		Reconnects:       m.Reconnects,
+		Errors:           m.Errors,
+		Duration:         m.EndTime.Sub(m.StartTime),
+		PeakAliveWatches: m.peakAliveWatches.Load(),
 	}
 
 	if len(m.ConnectLatencies) > 0 {
@@ -90,6 +112,7 @@ type MetricsSummary struct {
 	Reconnects         int64
 	Errors             int64
 	Duration           time.Duration
+	PeakAliveWatches   int64
 	AvgConnectLatency  time.Duration
 	MaxConnectLatency  time.Duration
 	AvgDeliveryLatency time.Duration
