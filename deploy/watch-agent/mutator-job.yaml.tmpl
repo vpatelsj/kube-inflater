@@ -1,32 +1,33 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: watch-agent
+  name: watch-mutator
   namespace: watch-stress
 spec:
-  parallelism: __REPLICAS__
-  completions: __REPLICAS__
+  parallelism: 1
+  completions: 1
   backoffLimit: 3
   ttlSecondsAfterFinished: 600
   template:
     metadata:
       labels:
-        app: watch-agent
+        app: watch-mutator
         run-id: "__RUN_ID__"
     spec:
       serviceAccountName: watch-agent
       terminationGracePeriodSeconds: 5
       restartPolicy: Never
       containers:
-        - name: watch-agent
+        - name: watch-mutator
           image: __IMAGE__
           args:
-            - "--connections=__CONNS_PER_POD__"
+            - "mutate"
+            - "--rate=__RATE__"
             - "--duration=__DURATION__"
-            - "--stagger=__STAGGER__"
-            - "--resource-type=__RESOURCE_TYPE__"
-            - "--namespace=__STRESS_NAMESPACE__"
-            - "--spread-count=__SPREAD_COUNT__"
+            - "--namespace=stress-test"
+            - "--spread-count=10"
+            - "--data-size=__DATA_SIZE__"
+            - "--batch-size=10"
             - "--qps=1000000"
             - "--burst=1000000"
           env:
@@ -34,13 +35,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: RUN_ID
-              value: "__RUN_ID__"
-            - name: RESULTS_NAMESPACE
-              value: "watch-stress"
           resources:
             requests:
-              cpu: 25m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              memory: 8Gi
+              memory: 1Gi

@@ -108,8 +108,6 @@ func ResourceInflater() error {
 	fmt.Println("Usage examples:")
 	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps,secrets --count=1000")
 	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200")
-	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=1000 --watch --watch-connections=50")
-	fmt.Println("    ./bin/kube-resource-inflater --watch-only --watch-types=configmaps --watch-connections=100")
 	fmt.Println("    ./bin/kube-resource-inflater --cleanup-only")
 	fmt.Println("    ./bin/kube-resource-inflater --cleanup-only --run-id=<id>")
 	fmt.Println("    ./bin/kube-resource-inflater --resource-types=configmaps --count=100 --dry-run")

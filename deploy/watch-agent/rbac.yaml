@@ -16,7 +16,7 @@ metadata:
 rules:
   - apiGroups: ["stresstest.kube-inflater.io"]
     resources: ["stressitems"]
-    verbs: ["list", "watch"]
+    verbs: ["list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "namespaces", "pods", "serviceaccounts"]
     verbs: ["list", "watch"]
@@ -39,3 +39,27 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: watch-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: watch-agent-results
+  namespace: watch-stress
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: watch-agent-results
+  namespace: watch-stress
+subjects:
+  - kind: ServiceAccount
+    name: watch-agent
+    namespace: watch-stress
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: watch-agent-results

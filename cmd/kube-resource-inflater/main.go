@@ -19,7 +19,6 @@ import (
 	"kube-inflater/internal/inflater"
 	"kube-inflater/internal/kwok"
 	"kube-inflater/internal/resourcegen"
-	"kube-inflater/internal/watchstress"
 )
 
 func main() {
@@ -84,16 +83,7 @@ func main() {
 		return
 	}
 
-	// Watch-only mode
-	if cfg.WatchOnly {
-		if err := runWatchOnly(ctx, dynClient, cfg); err != nil {
-			logErr(fmt.Sprintf("Watch stress failed: %v", err))
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Full workflow: ensure namespaces → create resources → watch stress → perf tests
+	// Full workflow: ensure namespaces → create resources → perf tests
 	engine := inflater.NewEngine(clientset, dynClient, cfg)
 
 	if err := engine.EnsureNamespaces(ctx); err != nil {
@@ -106,85 +96,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.WatchEnabled {
-		// Combined mode: start watches, then create
-		watchCfg := watchstress.Config{
-			Connections:   cfg.WatchConnections,
-			Duration:      cfg.WatchDuration,
-			ResourceTypes: effectiveWatchTypes(cfg),
-			Mode:          watchstress.ModeCombined,
-			Namespace:     cfg.Namespace,
-			SpreadCount:   cfg.SpreadNamespaces,
-		}
-		watcher := watchstress.NewWatcher(dynClient, watchCfg)
-
-		watchReady := make(chan struct{})
-		var watchMetrics *watchstress.Metrics
-		var watchErr error
-
-		go func() {
-			watchMetrics, watchErr = watcher.RunCombined(ctx, watchReady)
-		}()
-
-		// Wait for watches to be established
-		select {
-		case <-watchReady:
-			logInfo("All watch connections established, starting resource creation...")
-		case <-time.After(30 * time.Second):
-			logWarn("Timeout waiting for watch connections, proceeding anyway...")
-		case <-ctx.Done():
-			return
-		}
-
-		if err := engine.Run(ctx); err != nil {
-			logErr(fmt.Sprintf("Resource creation failed: %v", err))
-			os.Exit(1)
-		}
-
-		// Wait for watch to finish (duration-based)
-		logInfo("Waiting for watch stress duration to complete...")
-		<-ctx.Done()
-
-		if watchErr != nil {
-			logWarn(fmt.Sprintf("Watch stress error: %v", watchErr))
-		}
-		if watchMetrics != nil {
-			watchstress.PrintSummary(watchMetrics.Summary())
-		}
-	} else {
-		// Creation only
-		if err := engine.Run(ctx); err != nil {
-			logErr(fmt.Sprintf("Resource creation failed: %v", err))
-			os.Exit(1)
-		}
+	if err := engine.Run(ctx); err != nil {
+		logErr(fmt.Sprintf("Resource creation failed: %v", err))
+		os.Exit(1)
 	}
 
 	logInfo("🏗️  kube-resource-inflater completed!")
-}
-
-func runWatchOnly(ctx context.Context, dynClient dynamic.Interface, cfg *cfgpkg.ResourceInflaterConfig) error {
-	watchCfg := watchstress.Config{
-		Connections:   cfg.WatchConnections,
-		Duration:      cfg.WatchDuration,
-		ResourceTypes: effectiveWatchTypes(cfg),
-		Mode:          watchstress.ModeStandalone,
-		Namespace:     cfg.Namespace,
-		SpreadCount:   cfg.SpreadNamespaces,
-	}
-	watcher := watchstress.NewWatcher(dynClient, watchCfg)
-	metrics, err := watcher.RunStandalone(ctx)
-	if err != nil {
-		return err
-	}
-	watchstress.PrintSummary(metrics.Summary())
-	return nil
-}
-
-func effectiveWatchTypes(cfg *cfgpkg.ResourceInflaterConfig) []string {
-	if len(cfg.WatchTypes) > 0 {
-		return cfg.WatchTypes
-	}
-	return cfg.ResourceTypes
 }
 
 func loadConfig() *cfgpkg.ResourceInflaterConfig {
@@ -200,13 +117,10 @@ func loadConfig() *cfgpkg.ResourceInflaterConfig {
 		DataSizeBytes:    cfgpkg.DefaultDataSizeBytes,
 		BatchPause:       cfgpkg.DefaultBatchPause,
 		Namespace:        cfgpkg.DefaultResourceNamespace,
-		WatchConnections: cfgpkg.DefaultWatchConnections,
-		WatchDuration:    cfgpkg.DefaultWatchDuration,
 		KWOKNodes:        cfgpkg.DefaultKWOKNodes,
 	}
 
 	var resourceTypesCSV string
-	var watchTypesCSV string
 	qps := float64(cfg.QPS)
 
 	flag.StringVar(&resourceTypesCSV, "resource-types", "configmaps", "Comma-separated resource types to create: "+strings.Join(resourcegen.AllTypeNames(), ", "))
@@ -225,12 +139,6 @@ func loadConfig() *cfgpkg.ResourceInflaterConfig {
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Log what would be created without creating resources")
 	flag.BoolVar(&cfg.CleanupOnly, "cleanup-only", false, "Only delete resources from a previous run")
 	flag.StringVar(&cfg.RunID, "run-id", "", "Run ID (for cleanup; auto-generated if empty)")
-	flag.BoolVar(&cfg.WatchEnabled, "watch", false, "Enable watch stress testing after resource creation")
-	flag.BoolVar(&cfg.WatchOnly, "watch-only", false, "Only run watch stress testing (no resource creation)")
-	flag.IntVar(&cfg.WatchConnections, "watch-connections", cfg.WatchConnections, "Number of concurrent watch connections")
-	watchDurSec := int(cfg.WatchDuration / time.Second)
-	flag.IntVar(&watchDurSec, "watch-duration", watchDurSec, "Watch stress duration in seconds")
-	flag.StringVar(&watchTypesCSV, "watch-types", "", "Resource types to watch (defaults to --resource-types)")
 	flag.BoolVar(&cfg.KWOKEnabled, "kwok", false, "Use KWOK fake nodes for pods/jobs/statefulsets (avoids real kubelet load)")
 	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision")
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")
@@ -238,15 +146,11 @@ func loadConfig() *cfgpkg.ResourceInflaterConfig {
 	flag.Parse()
 
 	cfg.BatchPause = time.Duration(batchPauseSec) * time.Second
-	cfg.WatchDuration = time.Duration(watchDurSec) * time.Second
 	cfg.QPS = float32(qps)
 
 	// Parse resource types
 	if resourceTypesCSV != "" {
 		cfg.ResourceTypes = parseCSV(resourceTypesCSV)
-	}
-	if watchTypesCSV != "" {
-		cfg.WatchTypes = parseCSV(watchTypesCSV)
 	}
 
 	// Validate resource types

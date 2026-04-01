@@ -11,8 +11,6 @@ type Mode string
 
 const (
 	ModeStandalone Mode = "standalone"
-	ModeCombined   Mode = "combined"
-	ModeBoth       Mode = "both"
 )
 
 // Config holds watch stress test configuration.
@@ -164,4 +162,25 @@ func sortDurations(ds []time.Duration) {
 		}
 		ds[j+1] = key
 	}
+}
+
+// MutatorConfig holds configuration for the resource mutator.
+type MutatorConfig struct {
+	Rate          int           // mutations per second (0 = unlimited)
+	Duration      time.Duration // how long to run
+	Namespace     string        // namespace prefix for namespaced resources
+	SpreadCount   int           // number of spread namespaces
+	DataSizeBytes int           // payload size for created/updated resources
+	BatchSize     int           // items per create/delete cycle
+}
+
+// MutatorSummary holds the results of a mutation run.
+type MutatorSummary struct {
+	Pod        string  `json:"pod"`
+	Creates    int64   `json:"creates"`
+	Updates    int64   `json:"updates"`
+	Deletes    int64   `json:"deletes"`
+	Errors     int64   `json:"errors"`
+	Duration   float64 `json:"duration_sec"`
+	ActualRate float64 `json:"actual_rate"`
 }

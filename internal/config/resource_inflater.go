@@ -3,18 +3,17 @@ package config
 import "time"
 
 const (
-	DefaultResourceCount     = 1000
-	DefaultWorkers           = 50
-	DefaultQPS               = 100
-	DefaultBurst             = 200
-	DefaultBatchInitial      = 10
-	DefaultBatchFactor       = 2
-	DefaultMaxBatches        = 25
-	DefaultSpreadNamespaces  = 10
-	DefaultDataSizeBytes     = 1024
-	DefaultBatchPause        = 2 * time.Second
-	DefaultWatchConnections  = 100
-	DefaultWatchDuration     = 60 * time.Second
+	DefaultResourceCount    = 1000
+	DefaultWorkers          = 50
+	DefaultQPS              = 100
+	DefaultBurst            = 200
+	DefaultBatchInitial     = 10
+	DefaultBatchFactor      = 2
+	DefaultMaxBatches       = 25
+	DefaultSpreadNamespaces = 10
+	DefaultDataSizeBytes    = 1024
+	DefaultBatchPause       = 2 * time.Second
+
 	DefaultResourceNamespace = "stress-test"
 	DefaultKWOKNodes         = 10
 )
@@ -43,11 +42,4 @@ type ResourceInflaterConfig struct {
 	KWOKEnabled bool
 	KWOKNodes   int  // number of KWOK fake nodes to create
 	KWOKCleanup bool // also remove the KWOK controller on cleanup
-
-	// Watch stress
-	WatchEnabled     bool
-	WatchOnly        bool
-	WatchConnections int
-	WatchDuration    time.Duration
-	WatchTypes       []string // resource types to watch; defaults to ResourceTypes
 }
