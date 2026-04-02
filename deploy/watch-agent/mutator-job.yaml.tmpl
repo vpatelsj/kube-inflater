@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: watch-mutator
+  namespace: watch-stress
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: watch-mutator
+        run-id: "__RUN_ID__"
+    spec:
+      serviceAccountName: watch-agent
+      terminationGracePeriodSeconds: 5
+      restartPolicy: Never
+      containers:
+        - name: watch-mutator
+          image: __IMAGE__
+          args:
+            - "mutate"
+            - "--rate=__RATE__"
+            - "--duration=__DURATION__"
+            - "--namespace=stress-test"
+            - "--spread-count=10"
+            - "--data-size=__DATA_SIZE__"
+            - "--batch-size=10"
+            - "--qps=1000000"
+            - "--burst=1000000"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 1Gi
