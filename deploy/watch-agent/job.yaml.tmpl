@@ -6,7 +6,7 @@ metadata:
 spec:
   parallelism: __REPLICAS__
   completions: __REPLICAS__
-  backoffLimit: 3
+  backoffLimit: 10000
   ttlSecondsAfterFinished: 600
   template:
     metadata:

@@ -8,3 +8,4 @@ api-performance-*.md
 .vscode/
 .idea/
 .DS_Store
+watch-agent/watch-agent
