@@ -9,6 +9,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
@@ -58,6 +59,7 @@ func (w *Watcher) RunStandalone(ctx context.Context) (*Metrics, error) {
 				}
 			}
 			events, reconn, errs := w.watchLoop(ctx, connID, typeName, metrics)
+			metrics.AddConnEvents(connID, events)
 			totalEvents.Add(events)
 			reconnects.Add(reconn)
 			errors.Add(errs)
@@ -134,12 +136,14 @@ func (w *Watcher) watchLoop(ctx context.Context, connID int, typeName string, me
 			}
 			events++
 
-			// Measure delivery latency for ADDED events (only fresh, not replayed)
-			if event.Type == watch.Added {
-				if obj, ok := event.Object.(metav1.ObjectMetaAccessor); ok {
-					createTime := obj.GetObjectMeta().GetCreationTimestamp().Time
-					if !createTime.IsZero() && createTime.After(metrics.StartTime) {
-						metrics.AddDeliveryLatency(receiveTime.Sub(createTime))
+			// Measure delivery latency from mutated-at annotation (set by mutator)
+			if event.Type == watch.Added || event.Type == watch.Modified {
+				if obj, ok := event.Object.(*unstructured.Unstructured); ok {
+					annotations := obj.GetAnnotations()
+					if ts, found := annotations["mutated-at"]; found {
+						if mutatedAt, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+							metrics.AddDeliveryLatency(receiveTime.Sub(mutatedAt))
+						}
 					}
 				}
 			}

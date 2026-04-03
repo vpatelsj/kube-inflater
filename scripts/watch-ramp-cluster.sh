@@ -20,6 +20,8 @@ MAX_PODS="${MAX_PODS:-100000}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-10}"
 JOB_TIMEOUT="${JOB_TIMEOUT:-600}"
 MUTATION_RATE="${MUTATION_RATE:-100}"
+MUTATOR_DELAY="${MUTATOR_DELAY:-0}"
+MUTATOR_DURATION="${MUTATOR_DURATION:-0}"
 DATA_SIZE="${DATA_SIZE:-1024}"
 RESOURCE_TYPE="${RESOURCE_TYPE:-customresources}"
 SPREAD_COUNT="${SPREAD_COUNT:-10}"
@@ -116,64 +118,51 @@ wait_for_job() {
 }
 
 collect_metrics() {
-    local total_events=0 total_reconn=0 total_errors=0
-    local sum_avg_connect=0 max_connect=0 pod_count=0
-    local sum_peak_alive=0
-    local sum_avg_delivery=0 max_delivery=0 max_p99_delivery=0
-
-    # Collect results from ConfigMaps pushed by watch-agent pods
+    # Single-pass jq aggregation — avoids O(N×fields) shell loop over ConfigMaps
     local cm_json
+    log "    Fetching ConfigMaps..." >&2
     cm_json=$(kubectl get configmaps -n "$NAMESPACE" -l "app=watch-agent,run-id=$RUN_ID" -o json 2>/dev/null) || true
 
     local cm_count
     cm_count=$(echo "$cm_json" | jq '.items | length' 2>/dev/null) || cm_count=0
+    log "    Aggregating $cm_count ConfigMaps..." >&2
 
-    for (( i=0; i<cm_count; i++ )); do
-        local line
-        line=$(echo "$cm_json" | jq -r ".items[$i].data[\"result.json\"]" 2>/dev/null) || continue
-        [[ -z "$line" || "$line" == "null" ]] && continue
-
-        events=$(echo "$line" | jq -r '.events // 0')
-        reconn=$(echo "$line" | jq -r '.reconnects // 0')
-        errs=$(echo "$line" | jq -r '.errors // 0')
-        avg_c=$(echo "$line" | jq -r '.avg_connect_ms // 0')
-        max_c=$(echo "$line" | jq -r '.max_connect_ms // 0')
-        peak_a=$(echo "$line" | jq -r '.peak_alive_watches // 0')
-        avg_d=$(echo "$line" | jq -r '.avg_delivery_ms // 0')
-        max_d=$(echo "$line" | jq -r '.max_delivery_ms // 0')
-        p99_d=$(echo "$line" | jq -r '.p99_delivery_ms // 0')
-
-        total_events=$((total_events + events))
-        total_reconn=$((total_reconn + reconn))
-        total_errors=$((total_errors + errs))
-        sum_avg_connect=$(echo "$sum_avg_connect + $avg_c" | bc)
-        max_connect=$(echo "$max_connect $max_c" | tr ' ' '\n' | sort -g | tail -1)
-        sum_peak_alive=$((sum_peak_alive + peak_a))
-        sum_avg_delivery=$(echo "$sum_avg_delivery + $avg_d" | bc)
-        max_delivery=$(echo "$max_delivery $max_d" | tr ' ' '\n' | sort -g | tail -1)
-        max_p99_delivery=$(echo "$max_p99_delivery $p99_d" | tr ' ' '\n' | sort -g | tail -1)
-        pod_count=$((pod_count + 1))
-    done
-
-    if [[ "$pod_count" -eq 0 ]]; then
-        echo "0 0 0 0 0 0 0 0 0 0 0"
+    if [[ "$cm_count" -eq 0 ]]; then
+        echo "0 0 0 0 0 0 0 0 0 0 0 0 0"
         return
     fi
 
-    local avg_connect
-    avg_connect=$(echo "scale=3; $sum_avg_connect / $pod_count" | bc)
-    local avg_delivery
-    avg_delivery=$(echo "scale=3; $sum_avg_delivery / $pod_count" | bc)
-    local eps
-    eps=$(echo "scale=1; $total_events / $DURATION" | bc)
-
-    echo "$total_events $eps $total_reconn $total_errors $avg_connect $max_connect $sum_peak_alive $pod_count $avg_delivery $max_delivery $max_p99_delivery"
+    echo "$cm_json" | jq -r --arg dur "$DURATION" '
+        [.items[].data["result.json"] | fromjson] |
+        if length == 0 then "0 0 0 0 0 0 0 0 0 0 0 0 0"
+        else
+            (map(.events // 0) | add) as $total_events |
+            (map(.reconnects // 0) | add) as $total_reconn |
+            (map(.errors // 0) | add) as $total_errors |
+            (map(.avg_connect_ms // 0) | add / length) as $avg_connect |
+            (map(.max_connect_ms // 0) | max) as $max_connect |
+            (map(.peak_alive_watches // 0) | add) as $sum_peak_alive |
+            (map(.avg_delivery_ms // 0) | add / length) as $avg_delivery |
+            (map(.max_delivery_ms // 0) | max) as $max_delivery |
+            (map(.p99_delivery_ms // 0) | max) as $max_p99_delivery |
+            (map(.min_events_per_conn // 0) | min) as $min_epc |
+            (map(.max_events_per_conn // 0) | max) as $max_epc |
+            length as $pod_count |
+            ($total_events / ($dur | tonumber)) as $eps |
+            "\($total_events) \($eps | . * 10 | floor / 10) \($total_reconn) \($total_errors) \($avg_connect | . * 1000 | floor / 1000) \($max_connect) \($sum_peak_alive) \($pod_count) \($avg_delivery | . * 1000 | floor / 1000) \($max_delivery) \($max_p99_delivery) \($min_epc) \($max_epc)"
+        end
+    '
 }
 
 launch_mutator() {
     # Generate and apply the mutator job manifest
     # Mutator duration is slightly longer than watch duration to ensure events flow the entire time
-    local mutator_duration=$(( DURATION + 15 ))
+    local mutator_duration
+    if [[ "$MUTATOR_DURATION" -gt 0 ]]; then
+        mutator_duration=$MUTATOR_DURATION
+    else
+        mutator_duration=$(( DURATION + 15 ))
+    fi
     sed -e "s|__IMAGE__|$IMAGE|g" \
         -e "s|__RATE__|$MUTATION_RATE|g" \
         -e "s|__DURATION__|$mutator_duration|g" \
@@ -214,7 +203,7 @@ collect_mutator_metrics() {
 # --- Main ---
 
 RESULTS_FILE="/tmp/watch-ramp-cluster-$(date +%Y%m%d-%H%M%S).csv"
-echo "watches,pods,conns_per_pod,events,events_per_sec,reconnects,errors,peak_alive,avg_connect_ms,max_connect_ms,avg_delivery_ms,max_delivery_ms,p99_delivery_ms,mut_creates,mut_updates,mut_deletes,mut_errors,mut_rate,api_health_ms,status" > "$RESULTS_FILE"
+echo "watches,pods,conns_per_pod,events,events_per_sec,reconnects,errors,peak_alive,avg_connect_ms,max_connect_ms,avg_delivery_ms,max_delivery_ms,p99_delivery_ms,min_events_per_conn,max_events_per_conn,mut_creates,mut_updates,mut_deletes,mut_errors,mut_rate,api_health_ms,status" > "$RESULTS_FILE"
 
 log "Cluster Watch Ramp-Up Stress Test"
 log "Image: $IMAGE"
@@ -223,6 +212,7 @@ log "Mutation rate: $MUTATION_RATE/s, data size: ${DATA_SIZE}B"
 log "Resource type: $RESOURCE_TYPE, spread: $SPREAD_COUNT, namespace: $STRESS_NAMESPACE"
 log "Levels: ${LEVEL_ARRAY[*]}"
 log "Duration per round: ${DURATION}s, Stagger: ${STAGGER}s, Pause: ${PAUSE}s"
+log "Mutator delay: ${MUTATOR_DELAY}s, Mutator duration: ${MUTATOR_DURATION:-auto}s"
 log "Results: $RESULTS_FILE"
 
 # Pre-flight: ensure all prerequisites are in place
@@ -279,10 +269,10 @@ log "API server baseline: ${api_ms}ms"
 cr_count=$(kubectl get stressitems -A --no-headers --chunk-size=0 2>/dev/null | wc -l)
 log "Existing CRs: $cr_count"
 
-printf "\n%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-14s\n" \
-    "WATCHES" "PODS" "EVENTS" "EVENTS/SEC" "RECONNECTS" "ERRORS" "PEAK_ALIVE" "AVG_CONNECT_MS" "MAX_CONNECT_MS" "AVG_DELIVERY_MS" "MAX_DELIVERY_MS" "P99_DELIVERY_MS" "API_HEALTH_MS"
-printf "%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-14s\n" \
-    "-------" "----" "------" "----------" "----------" "------" "----------" "--------------" "--------------" "----------------" "----------------" "----------------" "-------------"
+printf "\n%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-12s %-12s %-14s\n" \
+    "WATCHES" "PODS" "EVENTS" "EVENTS/SEC" "RECONNECTS" "ERRORS" "PEAK_ALIVE" "AVG_CONNECT_MS" "MAX_CONNECT_MS" "AVG_DELIVERY_MS" "MAX_DELIVERY_MS" "P99_DELIVERY_MS" "MIN_EPC" "MAX_EPC" "API_HEALTH_MS"
+printf "%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-12s %-12s %-14s\n" \
+    "-------" "----" "------" "----------" "----------" "------" "----------" "--------------" "--------------" "----------------" "----------------" "----------------" "-------" "-------" "-------------"
 
 for TOTAL_WATCHES in "${LEVEL_ARRAY[@]}"; do
     # Calculate replicas and connections per pod, capping at MAX_PODS
@@ -308,18 +298,7 @@ for TOTAL_WATCHES in "${LEVEL_ARRAY[@]}"; do
     log "  Watches target: $RESOURCE_TYPE in ${STRESS_NAMESPACE}-{0..$((SPREAD_COUNT-1))} (${SPREAD_COUNT} namespaces)"
     log "  Duration: ${DURATION}s per pod, then pods emit JSON metrics to ConfigMap"
 
-    # Launch mutator first so events are flowing before watches connect (skip if rate=0)
-    if [[ "$MUTATION_RATE" -gt 0 ]]; then
-        log "  Launching mutator ($MUTATION_RATE mutations/sec)..."
-        if ! launch_mutator; then
-            warn "Failed to start mutator, proceeding anyway..."
-        fi
-        sleep 3  # give mutator a head start
-    else
-        log "  Mutation rate is 0 — skipping mutator (idle watch + reconnect mode)"
-    fi
-
-    # Generate and apply the watch-agent job manifest
+    # Generate and apply the watch-agent job manifest FIRST
     log "  Creating Job: $REPLICAS pods × $ACTUAL_CONNS conns = $ACTUAL_WATCHES watches..."
     sed -e "s|__IMAGE__|$IMAGE|g" \
         -e "s|__REPLICAS__|$REPLICAS|g" \
@@ -331,6 +310,20 @@ for TOTAL_WATCHES in "${LEVEL_ARRAY[@]}"; do
         -e "s|__STRESS_NAMESPACE__|$STRESS_NAMESPACE|g" \
         -e "s|__SPREAD_COUNT__|$SPREAD_COUNT|g" \
         "$TEMPLATE" | kubectl apply -f - &>/dev/null
+
+    # Launch mutator after watches stabilize (skip if rate=0)
+    if [[ "$MUTATION_RATE" -gt 0 ]]; then
+        if [[ "$MUTATOR_DELAY" -gt 0 ]]; then
+            log "  Waiting ${MUTATOR_DELAY}s for watches to stabilize before starting mutator..."
+            sleep "$MUTATOR_DELAY"
+        fi
+        log "  Launching mutator ($MUTATION_RATE mutations/sec, duration=${MUTATOR_DURATION:-auto}s)..."
+        if ! launch_mutator; then
+            warn "Failed to start mutator, proceeding anyway..."
+        fi
+    else
+        log "  Mutation rate is 0 — skipping mutator (idle watch + reconnect mode)"
+    fi
 
     log "  Waiting for pods to schedule and start watching..."
 
@@ -346,17 +339,28 @@ for TOTAL_WATCHES in "${LEVEL_ARRAY[@]}"; do
     # Small delay for logs to flush
     sleep 3
 
-    # Collect metrics from ConfigMaps
-    log "  Collecting metrics from ConfigMaps (run-id=$RUN_ID)..."
-    read -r events eps reconn errors avg_c max_c peak_alive pod_count avg_d max_d p99_d <<< "$(collect_metrics)"
-    log "  Collected results from $pod_count/$REPLICAS pods"
-
-    # Collect mutator metrics (skip if rate=0)
+    # Collect mutator metrics FIRST — mutator pod may be TTL-cleaned before watch ConfigMap collection finishes
     if [[ "$MUTATION_RATE" -gt 0 ]]; then
+        # Wait for mutator pod to finish (it may still be running if MUTATOR_DELAY + MUTATOR_DURATION > DURATION)
+        log "  Waiting for mutator pod to complete..."
+        mut_deadline=$(( $(date +%s) + 120 ))
+        while [[ $(date +%s) -lt "$mut_deadline" ]]; do
+            mut_phase=$(kubectl get pods -n "$NAMESPACE" -l app=watch-mutator,run-id="$RUN_ID" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+            [[ "$mut_phase" == "Succeeded" || "$mut_phase" == "Failed" ]] && break
+            [[ -z "$mut_phase" ]] && break  # pod already cleaned up
+            sleep 5
+        done
+        log "  Collecting mutator metrics..."
         read -r mut_creates mut_updates mut_deletes mut_errors mut_rate <<< "$(collect_mutator_metrics)"
+        log "  Mutator: creates=$mut_creates updates=$mut_updates deletes=$mut_deletes errors=$mut_errors rate=$mut_rate"
     else
         mut_creates=0 mut_updates=0 mut_deletes=0 mut_errors=0 mut_rate=0
     fi
+
+    # Collect watch metrics from ConfigMaps (can take minutes at scale)
+    log "  Collecting metrics from ConfigMaps (run-id=$RUN_ID)..."
+    read -r events eps reconn errors avg_c max_c peak_alive pod_count avg_d max_d p99_d min_epc max_epc <<< "$(collect_metrics)"
+    log "  Collected results from $pod_count/$REPLICAS pods"
 
     # Post-round health check
     log "  Checking API server health post-round..."
@@ -372,16 +376,32 @@ for TOTAL_WATCHES in "${LEVEL_ARRAY[@]}"; do
 
     log "  Round summary: events=$events eps=$eps reconnects=$reconn errors=$errors peak_alive=$peak_alive api_health=${post_api_ms}ms status=$status"
 
-    printf "%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-14s %s\n" \
-        "$ACTUAL_WATCHES" "$pod_count/$REPLICAS" "$events" "$eps" "$reconn" "$errors" "$peak_alive" "${avg_c}ms" "${max_c}ms" "${avg_d}ms" "${max_d}ms" "${p99_d}ms" "${post_api_ms}ms" "$status"
+    printf "%-10s %-8s %-12s %-14s %-12s %-12s %-12s %-18s %-15s %-18s %-18s %-18s %-12s %-12s %-14s %s\n" \
+        "$ACTUAL_WATCHES" "$pod_count/$REPLICAS" "$events" "$eps" "$reconn" "$errors" "$peak_alive" "${avg_c}ms" "${max_c}ms" "${avg_d}ms" "${max_d}ms" "${p99_d}ms" "$min_epc" "$max_epc" "${post_api_ms}ms" "$status"
 
-    echo "$ACTUAL_WATCHES,$pod_count,$ACTUAL_CONNS,$events,$eps,$reconn,$errors,$peak_alive,$avg_c,$max_c,$avg_d,$max_d,$p99_d,$mut_creates,$mut_updates,$mut_deletes,$mut_errors,$mut_rate,$post_api_ms,$status" >> "$RESULTS_FILE"
+    echo "$ACTUAL_WATCHES,$pod_count,$ACTUAL_CONNS,$events,$eps,$reconn,$errors,$peak_alive,$avg_c,$max_c,$avg_d,$max_d,$p99_d,$min_epc,$max_epc,$mut_creates,$mut_updates,$mut_deletes,$mut_errors,$mut_rate,$post_api_ms,$status" >> "$RESULTS_FILE"
 
     # Clean up result ConfigMaps from this round
-    log "  Cleaning up ConfigMaps and Job for this round..."
-    kubectl delete configmaps -n "$NAMESPACE" -l "run-id=$RUN_ID" --ignore-not-found &>/dev/null || true
+    log "  Cleaning up ConfigMaps for this round..."
+    cm_total=$(kubectl get configmaps -n "$NAMESPACE" -l "run-id=$RUN_ID" --no-headers 2>/dev/null | wc -l)
+    if [[ "$cm_total" -gt 0 ]]; then
+        # Delete in batches to avoid API server timeout on large label-selector deletes
+        deleted=0
+        while true; do
+            remaining=0
+            remaining=$(kubectl get configmaps -n "$NAMESPACE" -l "run-id=$RUN_ID" --no-headers 2>/dev/null | wc -l)
+            [[ "$remaining" -eq 0 ]] && break
+            kubectl delete configmaps -n "$NAMESPACE" -l "run-id=$RUN_ID" --ignore-not-found --limit=500 &>/dev/null || true
+            deleted=$(( cm_total - remaining ))
+            printf "\r  Deleted ConfigMaps: %d/%d  " "$deleted" "$cm_total"
+            sleep 1
+        done
+        echo ""
+        log "  ConfigMap cleanup complete."
+    fi
 
-    # Cleanup before next round
+    # Cleanup jobs before next round
+    log "  Cleaning up Jobs..."
     cleanup_job
 
     if [[ "$status" == "API_TIMEOUT" ]]; then

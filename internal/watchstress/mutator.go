@@ -96,7 +96,8 @@ func (m *Mutator) Run(ctx context.Context) (*MutatorSummary, error) {
 			if !wait() {
 				break
 			}
-			patch := fmt.Sprintf(`{"spec":{"payload":"%s"}}`, m.randomPayload(64))
+			patch := fmt.Sprintf(`{"metadata":{"annotations":{"mutated-at":"%s"}},"spec":{"payload":"%s"}}`,
+				time.Now().Format(time.RFC3339Nano), m.randomPayload(64))
 			_, err := m.dynClient.Resource(stressItemGVR).Namespace(ns).Patch(
 				ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 			if err != nil {
@@ -151,6 +152,9 @@ func (m *Mutator) buildStressItem(name, namespace string, cycle int) *unstructur
 				"namespace": namespace,
 				"labels": map[string]interface{}{
 					"app": resourcegen.AppLabel,
+				},
+				"annotations": map[string]interface{}{
+					"mutated-at": time.Now().Format(time.RFC3339Nano),
 				},
 			},
 			"spec": map[string]interface{}{

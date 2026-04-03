@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
@@ -85,19 +86,21 @@ func runWatch() {
 
 	summary := metrics.Summary()
 	result := map[string]interface{}{
-		"pod":                os.Getenv("POD_NAME"),
-		"events":             summary.TotalEvents,
-		"events_per_sec":     summary.EventsPerSecond,
-		"reconnects":         summary.Reconnects,
-		"errors":             summary.Errors,
-		"peak_alive_watches": summary.PeakAliveWatches,
-		"avg_connect_ms":     float64(summary.AvgConnectLatency) / float64(time.Millisecond),
-		"max_connect_ms":     float64(summary.MaxConnectLatency) / float64(time.Millisecond),
-		"avg_delivery_ms":    float64(summary.AvgDeliveryLatency) / float64(time.Millisecond),
-		"max_delivery_ms":    float64(summary.MaxDeliveryLatency) / float64(time.Millisecond),
-		"p99_delivery_ms":    float64(summary.P99DeliveryLatency) / float64(time.Millisecond),
-		"duration_sec":       summary.Duration.Seconds(),
-		"connections":        connections,
+		"pod":                 os.Getenv("POD_NAME"),
+		"events":              summary.TotalEvents,
+		"events_per_sec":      summary.EventsPerSecond,
+		"reconnects":          summary.Reconnects,
+		"errors":              summary.Errors,
+		"peak_alive_watches":  summary.PeakAliveWatches,
+		"avg_connect_ms":      float64(summary.AvgConnectLatency) / float64(time.Millisecond),
+		"max_connect_ms":      float64(summary.MaxConnectLatency) / float64(time.Millisecond),
+		"avg_delivery_ms":     float64(summary.AvgDeliveryLatency) / float64(time.Millisecond),
+		"max_delivery_ms":     float64(summary.MaxDeliveryLatency) / float64(time.Millisecond),
+		"p99_delivery_ms":     float64(summary.P99DeliveryLatency) / float64(time.Millisecond),
+		"min_events_per_conn": summary.MinEventsPerConn,
+		"max_events_per_conn": summary.MaxEventsPerConn,
+		"duration_sec":        summary.Duration.Seconds(),
+		"connections":         connections,
 	}
 
 	resultJSON, err := json.Marshal(result)
@@ -153,12 +156,20 @@ func pushResultsConfigMap(resultJSON []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err = clientset.CoreV1().ConfigMaps(resultsNS).Create(ctx, cm, metav1.CreateOptions{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "configmap push: failed to create configmap: %v\n", err)
-		return
+	// Retry with jitter to avoid ConfigMap push stampede when all pods finish simultaneously
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			jitter := time.Duration(500+rand.Intn(2000*(1<<attempt))) * time.Millisecond
+			time.Sleep(jitter)
+		}
+		_, lastErr = clientset.CoreV1().ConfigMaps(resultsNS).Create(ctx, cm, metav1.CreateOptions{})
+		if lastErr == nil {
+			fmt.Fprintf(os.Stderr, "configmap push: created configmap result-%s in %s\n", podName, resultsNS)
+			return
+		}
 	}
-	fmt.Fprintf(os.Stderr, "configmap push: created configmap result-%s in %s\n", podName, resultsNS)
+	fmt.Fprintf(os.Stderr, "configmap push: failed after 5 attempts: %v\n", lastErr)
 }
 
 func runMutate() {
