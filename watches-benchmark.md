@@ -1,4 +1,4 @@
-# Kubernetes Watch Capacity Report — April 2, 2026
+# Kubernetes Watch Capacity Report 
 
 ## Cluster
 
