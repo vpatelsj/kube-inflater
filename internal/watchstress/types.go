@@ -36,6 +36,7 @@ type Metrics struct {
 	Errors                 int64
 	StartTime              time.Time
 	EndTime                time.Time
+	PerConnEvents          map[int]int64
 
 	aliveWatches     atomic.Int64
 	peakAliveWatches atomic.Int64
@@ -53,6 +54,16 @@ func (m *Metrics) AddDeliveryLatency(d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.EventDeliveryLatencies = append(m.EventDeliveryLatencies, d)
+}
+
+// AddConnEvents records the total event count for a single watch connection.
+func (m *Metrics) AddConnEvents(connID int, count int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.PerConnEvents == nil {
+		m.PerConnEvents = make(map[int]int64)
+	}
+	m.PerConnEvents[connID] = count
 }
 
 // WatchOpened increments the alive watch counter and updates the peak.
@@ -100,6 +111,27 @@ func (m *Metrics) Summary() MetricsSummary {
 		s.P99DeliveryLatency = percentile(m.EventDeliveryLatencies, 0.99)
 	}
 
+	if len(m.PerConnEvents) > 0 {
+		var minE, maxE int64
+		first := true
+		for _, count := range m.PerConnEvents {
+			if first {
+				minE = count
+				maxE = count
+				first = false
+			} else {
+				if count < minE {
+					minE = count
+				}
+				if count > maxE {
+					maxE = count
+				}
+			}
+		}
+		s.MinEventsPerConn = minE
+		s.MaxEventsPerConn = maxE
+	}
+
 	return s
 }
 
@@ -116,6 +148,8 @@ type MetricsSummary struct {
 	AvgDeliveryLatency time.Duration
 	MaxDeliveryLatency time.Duration
 	P99DeliveryLatency time.Duration
+	MinEventsPerConn   int64
+	MaxEventsPerConn   int64
 }
 
 func avg(ds []time.Duration) time.Duration {
