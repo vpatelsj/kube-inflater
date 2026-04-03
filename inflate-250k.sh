@@ -12,7 +12,7 @@ NAMESPACE="kubemark-incremental-test"
 TARGET=300000
 STEP_END=50
 CONTAINERS_PER_POD=10
-INFLATER_DIR="/home/vapa/dev/kube-inflater"
+INFLATER_DIR="$HOME/Code/kube-inflater"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,7 +31,8 @@ get_node_count() {
 # Detect highest existing hollow-step-N daemonset to resume from
 get_last_completed_step() {
   kubectl get ds -n "$NAMESPACE" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null \
-    | { grep -oP '^hollow-step-\K[0-9]+' || true; } \
+    | { grep -oE '^hollow-step-[0-9]+' || true; } \
+    | sed 's/^hollow-step-//' \
     | sort -n \
     | tail -1
 }
