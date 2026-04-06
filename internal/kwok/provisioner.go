@@ -103,25 +103,6 @@ containerStatuses:
 phase: Succeeded
 `
 
-// NodeSelector returns the nodeSelector that directs pods to KWOK fake nodes.
-func NodeSelector() map[string]interface{} {
-	return map[string]interface{}{
-		KWOKNodeLabel: KWOKNodeValue,
-	}
-}
-
-// Tolerations returns tolerations for scheduling on tainted KWOK nodes.
-func Tolerations() []interface{} {
-	return []interface{}{
-		map[string]interface{}{
-			"key":      KWOKNodeLabel,
-			"operator": "Equal",
-			"value":    KWOKNodeValue,
-			"effect":   "NoSchedule",
-		},
-	}
-}
-
 // Provisioner manages the KWOK controller and fake node lifecycle.
 type Provisioner struct {
 	client    kubernetes.Interface

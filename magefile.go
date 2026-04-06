@@ -12,7 +12,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -271,57 +270,4 @@ func EtcdTester() error {
 	fmt.Println("    ./bin/etcd-tester perf localhost:2379 100 5        # Run performance test (100 nodes, 5 minutes)")
 	fmt.Println("    ./bin/etcd-tester perf localhost:2379 1000 0       # Run performance test (1000 nodes, indefinite)")
 	return nil
-}
-
-// getAzureACRCredentials attempts to get ACR credentials using Azure CLI
-func getAzureACRCredentials(registryName string, username, password *string) error {
-	// Check if Azure CLI is available
-	if err := exec.Command("az", "--version").Run(); err != nil {
-		return fmt.Errorf("Azure CLI not found. Install it or use --manual flag")
-	}
-
-	// Check if user is logged in
-	if err := exec.Command("az", "account", "show").Run(); err != nil {
-		return fmt.Errorf("not logged in to Azure. Run 'az login' first or use --manual flag")
-	}
-
-	fmt.Printf("Getting ACR credentials for registry '%s'...\n", registryName)
-
-	// Get ACR credentials
-	cmd := exec.Command("az", "acr", "credential", "show", "--name", registryName, "--output", "json")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		errMsg := string(output)
-		if strings.Contains(errMsg, "admin-enabled") {
-			return fmt.Errorf("ACR admin access not enabled. Run: az acr update -n %s --admin-enabled true", registryName)
-		}
-		return fmt.Errorf("failed to get ACR credentials: %s. Ensure you have access to the registry or use --manual flag", errMsg)
-	}
-
-	// Parse JSON response
-	var creds struct {
-		Username  string `json:"username"`
-		Passwords []struct {
-			Name  string `json:"name"`
-			Value string `json:"value"`
-		} `json:"passwords"`
-	}
-
-	if err := parseJSON(output, &creds); err != nil {
-		return fmt.Errorf("failed to parse ACR credentials: %v", err)
-	}
-
-	if creds.Username == "" || len(creds.Passwords) == 0 {
-		return fmt.Errorf("no valid credentials found for registry '%s'", registryName)
-	}
-
-	*username = creds.Username
-	*password = creds.Passwords[0].Value
-
-	return nil
-}
-
-// parseJSON parses the ACR credentials JSON response
-func parseJSON(data []byte, target interface{}) error {
-	return json.Unmarshal(data, target)
 }

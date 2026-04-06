@@ -165,7 +165,6 @@ mage etcdTester
 cmd/
   kube-inflater/          Hollow node inflation CLI
   kube-resource-inflater/ Bulk resource creation CLI
-  kube-pressure-cooker/   Combined inflation variant
   watch-agent/            Watch stress agent (watch + mutate subcommands)
   perf-report/            API latency report generator
   cleanup-nodes/          Node/pod cleanup utility
