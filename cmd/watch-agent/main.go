@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"kube-inflater/internal/benchmarkio"
 	"kube-inflater/internal/watchstress"
 )
 
@@ -50,6 +51,7 @@ func runWatch() {
 		spreadCount  int
 		qps          float64
 		burst        int
+		jsonReportDir string
 	)
 
 	flag.IntVar(&connections, "connections", 1, "Number of watch connections this agent opens")
@@ -60,6 +62,7 @@ func runWatch() {
 	flag.IntVar(&spreadCount, "spread-count", 10, "Number of spread namespaces to watch")
 	flag.Float64Var(&qps, "qps", 1000000, "Client QPS (set very high to disable rate limiting)")
 	flag.IntVar(&burst, "burst", 1000000, "Client burst (set very high to disable rate limiting)")
+	flag.StringVar(&jsonReportDir, "json-report-dir", "", "Directory to write JSON report (for benchmark-ui)")
 	flag.Parse()
 
 	dynClient := mustDynClient(qps, burst)
@@ -112,6 +115,28 @@ func runWatch() {
 
 	// Push results to a ConfigMap for scalable collection
 	pushResultsConfigMap(resultJSON)
+
+	// Write JSON report for benchmark-ui
+	if jsonReportDir != "" {
+		runID := os.Getenv("RUN_ID")
+		if runID == "" {
+			runID = fmt.Sprintf("watch-%d", time.Now().Unix())
+		}
+		bioCfg := benchmarkio.WatchStressConfig{
+			Connections:   connections,
+			DurationSec:   durationSec,
+			StaggerSec:    staggerSec,
+			ResourceTypes: strings.Split(resourceType, ","),
+			Namespace:     namespace,
+			SpreadCount:   spreadCount,
+		}
+		path, writeErr := benchmarkio.WriteWatchStressReport(jsonReportDir, runID, bioCfg, &summary, nil)
+		if writeErr != nil {
+			fmt.Fprintf(os.Stderr, "json report: %v\n", writeErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "json report: written to %s\n", path)
+		}
+	}
 }
 
 func pushResultsConfigMap(resultJSON []byte) {

@@ -197,6 +197,32 @@ func PerfReportFull() error {
 	return cmd.Run()
 }
 
+// BenchmarkUI builds the benchmark-ui server binary
+func BenchmarkUI() error {
+	fmt.Println("==> Building benchmark-ui 📊")
+	outDir := filepath.Join(".", "bin")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	if err := run("go", "build", "-o", filepath.Join(outDir, "benchmark-ui"), "./cmd/benchmark-ui"); err != nil {
+		return err
+	}
+	fmt.Println("==> Built bin/benchmark-ui 📊")
+	fmt.Println("Usage:")
+	fmt.Println("    ./bin/benchmark-ui --reports-dir=./benchmark-reports --port=8080")
+	return nil
+}
+
+// FrontendBuild runs npm build in the ui/ directory
+func FrontendBuild() error {
+	fmt.Println("==> Building frontend 🎨")
+	cmd := exec.Command("npm", "run", "build")
+	cmd.Dir = "ui"
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 // AnalyzeNotReady builds and runs the NotReady pods analyzer
 func AnalyzeNotReady() error {
 	fmt.Println("==> Building and running NotReady pods analyzer")
