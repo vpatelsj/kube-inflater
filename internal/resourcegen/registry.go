@@ -5,7 +5,6 @@ import "fmt"
 // GeneratorOpts are options passed to generator constructors.
 type GeneratorOpts struct {
 	DataSizeBytes int
-	UseKWOK       bool
 }
 
 // registry maps short type names to generator constructors.
@@ -14,10 +13,10 @@ var registry = map[string]func(opts GeneratorOpts) ResourceGenerator{
 	"secrets":         func(o GeneratorOpts) ResourceGenerator { return &SecretGenerator{DataSizeBytes: o.DataSizeBytes} },
 	"services":        func(_ GeneratorOpts) ResourceGenerator { return &ServiceGenerator{} },
 	"namespaces":      func(_ GeneratorOpts) ResourceGenerator { return &NamespaceGenerator{} },
-	"pods":            func(o GeneratorOpts) ResourceGenerator { return &PodGenerator{UseKWOK: o.UseKWOK} },
+	"pods":            func(o GeneratorOpts) ResourceGenerator { return &PodGenerator{} },
 	"serviceaccounts": func(_ GeneratorOpts) ResourceGenerator { return &ServiceAccountGenerator{} },
-	"jobs":            func(o GeneratorOpts) ResourceGenerator { return &JobGenerator{UseKWOK: o.UseKWOK} },
-	"statefulsets":    func(o GeneratorOpts) ResourceGenerator { return &StatefulSetGenerator{UseKWOK: o.UseKWOK} },
+	"jobs":            func(o GeneratorOpts) ResourceGenerator { return &JobGenerator{} },
+	"statefulsets":    func(o GeneratorOpts) ResourceGenerator { return &StatefulSetGenerator{} },
 	"customresources": func(o GeneratorOpts) ResourceGenerator { return &CRDGenerator{DataSizeBytes: o.DataSizeBytes} },
 }
 

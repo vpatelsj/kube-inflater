@@ -26,3 +26,26 @@ func TestCalculateBatchesPlan(t *testing.T) {
 		}
 	}
 }
+
+func TestCalculateBatchesPlan500k(t *testing.T) {
+	target := 500000
+	p := CalculateBatchesPlan(100, 2, target, 30)
+
+	total := 0
+	for _, batch := range p {
+		total += batch[1]
+	}
+	if total != target {
+		t.Fatalf("total=%d, want %d (batches=%d)", total, target, len(p))
+	}
+
+	// First batch should be 100
+	if p[0][1] != 100 {
+		t.Fatalf("first batch size=%d, want 100", p[0][1])
+	}
+
+	// Should fit within 30 batches
+	if len(p) > 30 {
+		t.Fatalf("batch count=%d, exceeds max 30", len(p))
+	}
+}

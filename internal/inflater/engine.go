@@ -18,11 +18,46 @@ import (
 	"kube-inflater/internal/resourcegen"
 )
 
+// BatchResult captures metrics for a single batch of resource creation.
+type BatchResult struct {
+	BatchNum int
+	Size     int
+	Created  int64
+	Failed   int64
+	Duration time.Duration
+}
+
+// Throughput returns the creation rate in resources per second.
+func (b BatchResult) Throughput() float64 {
+	if b.Duration <= 0 {
+		return 0
+	}
+	return float64(b.Created) / b.Duration.Seconds()
+}
+
+// InflationSummary is the overall result of an inflation run.
+type InflationSummary struct {
+	ResourceType  string
+	TotalCreated  int64
+	TotalFailed   int64
+	TotalDuration time.Duration
+	Batches       []BatchResult
+}
+
+// Throughput returns the overall creation rate in resources per second.
+func (s InflationSummary) Throughput() float64 {
+	if s.TotalDuration <= 0 {
+		return 0
+	}
+	return float64(s.TotalCreated) / s.TotalDuration.Seconds()
+}
+
 // Engine orchestrates bulk resource creation with a worker pool.
 type Engine struct {
 	client    kubernetes.Interface
 	dynClient dynamic.Interface
 	cfg       *cfgpkg.ResourceInflaterConfig
+	Results   []InflationSummary
 }
 
 // NewEngine creates a new inflater engine.
@@ -46,7 +81,6 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 	opts := resourcegen.GeneratorOpts{
 		DataSizeBytes: e.cfg.DataSizeBytes,
-		UseKWOK:       e.cfg.KWOKEnabled,
 	}
 	gen, err := resourcegen.NewGeneratorWithOpts(typeName, opts)
 	if err != nil {
@@ -63,6 +97,10 @@ func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 	batches := plan.CalculateBatchesPlan(e.cfg.BatchInitial, e.cfg.BatchFactor, e.cfg.CountPerType, e.cfg.MaxBatches)
 	logInfo(fmt.Sprintf("Inflating %s: %d total in %d batches (workers=%d)", typeName, e.cfg.CountPerType, len(batches), e.cfg.Workers))
 
+	var summary InflationSummary
+	summary.ResourceType = typeName
+	runStart := time.Now()
+
 	globalIndex := 0
 	for _, batch := range batches {
 		if err := ctx.Err(); err != nil {
@@ -71,8 +109,26 @@ func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 		batchNum, batchSize := batch[0], batch[1]
 		logInfo(fmt.Sprintf("  Batch %d: creating %d %s", batchNum, batchSize, typeName))
 
-		if err := e.createBatch(ctx, gen, globalIndex, batchSize); err != nil {
-			return fmt.Errorf("batch %d: %w", batchNum, err)
+		batchStart := time.Now()
+		created, failed, batchErr := e.createBatch(ctx, gen, globalIndex, batchSize)
+		batchDuration := time.Since(batchStart)
+
+		br := BatchResult{
+			BatchNum: batchNum,
+			Size:     batchSize,
+			Created:  created,
+			Failed:   failed,
+			Duration: batchDuration,
+		}
+		summary.Batches = append(summary.Batches, br)
+		summary.TotalCreated += created
+		summary.TotalFailed += failed
+
+		logInfo(fmt.Sprintf("  Batch %d done: %d created, %d failed in %v (%.0f/sec)",
+			batchNum, created, failed, batchDuration.Round(time.Millisecond), br.Throughput()))
+
+		if batchErr != nil {
+			return fmt.Errorf("batch %d: %w", batchNum, batchErr)
 		}
 		globalIndex += batchSize
 
@@ -85,12 +141,15 @@ func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 		}
 	}
 
-	logInfo(fmt.Sprintf("Completed inflating %s: %d created", typeName, globalIndex))
+	summary.TotalDuration = time.Since(runStart)
+	e.Results = append(e.Results, summary)
+	logInfo(fmt.Sprintf("Completed inflating %s: %d created in %v (%.0f/sec)",
+		typeName, summary.TotalCreated, summary.TotalDuration.Round(time.Millisecond), summary.Throughput()))
 	return nil
 }
 
-func (e *Engine) createBatch(ctx context.Context, gen resourcegen.ResourceGenerator, startIndex, count int) error {
-	var created, failed atomic.Int64
+func (e *Engine) createBatch(ctx context.Context, gen resourcegen.ResourceGenerator, startIndex, count int) (created int64, failed int64, err error) {
+	var createdAtomic, failedAtomic atomic.Int64
 	var wg sync.WaitGroup
 
 	work := make(chan int, count)
@@ -113,22 +172,17 @@ func (e *Engine) createBatch(ctx context.Context, gen resourcegen.ResourceGenera
 					return
 				}
 				if err := e.createOne(ctx, gen, idx); err != nil {
-					failed.Add(1)
+					failedAtomic.Add(1)
 					logWarn(fmt.Sprintf("Failed creating %s index %d: %v", gen.TypeName(), idx, err))
 				} else {
-					created.Add(1)
+					createdAtomic.Add(1)
 				}
 			}
 		}()
 	}
 
 	wg.Wait()
-
-	c, f := created.Load(), failed.Load()
-	if f > 0 {
-		logWarn(fmt.Sprintf("  Batch result: %d created, %d failed", c, f))
-	}
-	return nil
+	return createdAtomic.Load(), failedAtomic.Load(), nil
 }
 
 func (e *Engine) createOne(ctx context.Context, gen resourcegen.ResourceGenerator, index int) error {
@@ -164,21 +218,19 @@ func (e *Engine) namespaceForIndex(index int) string {
 	return fmt.Sprintf("%s-%d", e.cfg.Namespace, nsIdx)
 }
 
-// EnsureKWOK provisions the KWOK controller and fake nodes when --kwok is enabled.
+// EnsureKWOK provisions the KWOK controller and fake nodes when pod-bearing
+// resource types (pods, jobs, statefulsets) are selected.
 func (e *Engine) EnsureKWOK(ctx context.Context) error {
-	if !e.cfg.KWOKEnabled {
+	if !e.cfg.HasPodBearingTypes() {
 		return nil
 	}
-	// Only needed if resource types include pod-bearing workloads
+
+	// Count pod-bearing types to calculate total pod slots needed
 	podBearingCount := 0
 	for _, t := range e.cfg.ResourceTypes {
 		if t == "pods" || t == "jobs" || t == "statefulsets" {
 			podBearingCount++
 		}
-	}
-	if podBearingCount == 0 {
-		logInfo("KWOK enabled but no pod-bearing resource types selected, skipping")
-		return nil
 	}
 
 	// Auto-calculate nodes needed: count * number-of-pod-bearing-types

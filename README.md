@@ -82,6 +82,8 @@ Creates thousands of Kubernetes resources across spread namespaces using exponen
 
 **Supported resource types:** `configmaps`, `secrets`, `services`, `namespaces`, `pods`, `serviceaccounts`, `jobs`, `statefulsets`, `customresources`
 
+> **Pod benchmarking is KWOK-only**: When `pods`, `jobs`, or `statefulsets` are selected, KWOK fake nodes are automatically provisioned. Pods always schedule on KWOK nodes — no real kubelet load, no `--kwok` flag needed.
+
 ```bash
 # 1000 ConfigMaps and Secrets (default settings)
 ./bin/kube-resource-inflater --resource-types=configmaps,secrets --count=1000
@@ -89,8 +91,15 @@ Creates thousands of Kubernetes resources across spread namespaces using exponen
 # 100k ConfigMaps, high throughput
 ./bin/kube-resource-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200
 
-# Schedule pods on KWOK fake nodes instead of real kubelets
-./bin/kube-resource-inflater --resource-types=pods --count=5000 --kwok --kwok-nodes=10
+# 500k pods on KWOK fake nodes (KWOK auto-enabled)
+./bin/kube-resource-inflater --resource-types=pods --count=500000 \
+  --workers=200 --qps=500 --burst=1000 \
+  --batch-initial=100 --batch-factor=2 --max-batches=30 \
+  --spread-namespaces=100 --batch-pause=1
+
+# Generate a benchmark report (includes creation throughput + API latency)
+./bin/kube-resource-inflater --resource-types=pods --count=5000 \
+  --benchmark-report --report-output-dir=/tmp/reports
 
 # Preview without creating anything
 ./bin/kube-resource-inflater --resource-types=configmaps --count=100 --dry-run

@@ -38,8 +38,18 @@ type ResourceInflaterConfig struct {
 	PerfTests        int
 	SkipPerfTests    bool
 
-	// KWOK — schedule pods/jobs/statefulsets on fake KWOK nodes to avoid real kubelet load
-	KWOKEnabled bool
-	KWOKNodes   int  // number of KWOK fake nodes to create
+	// KWOK — automatically enabled when pod-bearing resource types (pods, jobs, statefulsets) are selected.
+	// Pods always schedule on KWOK fake nodes to avoid real kubelet load.
+	KWOKNodes   int  // number of KWOK fake nodes to create (auto-scaled if too low)
 	KWOKCleanup bool // also remove the KWOK controller on cleanup
+}
+
+// HasPodBearingTypes returns true if any of the configured resource types create pods.
+func (c *ResourceInflaterConfig) HasPodBearingTypes() bool {
+	for _, t := range c.ResourceTypes {
+		if t == "pods" || t == "jobs" || t == "statefulsets" {
+			return true
+		}
+	}
+	return false
 }
