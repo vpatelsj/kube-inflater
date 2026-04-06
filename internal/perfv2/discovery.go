@@ -113,34 +113,6 @@ func (ed *EndpointDiscovery) buildFullPath(groupVersion, resource string, namesp
 	return fmt.Sprintf("/apis/%s/%s/%s", group, version, resource)
 }
 
-// FilterEndpointsByVerbs filters endpoints that support specific verbs
-func (ed *EndpointDiscovery) FilterEndpointsByVerbs(endpoints []APIEndpoint, verbs ...string) []APIEndpoint {
-	var filtered []APIEndpoint
-
-	for _, endpoint := range endpoints {
-		hasAllVerbs := true
-		for _, requiredVerb := range verbs {
-			found := false
-			for _, supportedVerb := range endpoint.Verbs {
-				if supportedVerb == requiredVerb {
-					found = true
-					break
-				}
-			}
-			if !found {
-				hasAllVerbs = false
-				break
-			}
-		}
-
-		if hasAllVerbs {
-			filtered = append(filtered, endpoint)
-		}
-	}
-
-	return filtered
-}
-
 // GetCommonEndpoints returns a curated list of commonly used endpoints for performance testing
 func (ed *EndpointDiscovery) GetCommonEndpoints(endpoints []APIEndpoint) []APIEndpoint {
 	commonResources := map[string]bool{

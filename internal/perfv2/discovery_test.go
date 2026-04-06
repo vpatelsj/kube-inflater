@@ -25,10 +25,6 @@ func TestEndpointDiscovery(t *testing.T) {
 
 	// discovery.PrintEndpoints(endpoints)
 
-	// // Test filtering by verbs
-	// listableEndpoints := discovery.FilterEndpointsByVerbs(endpoints, "list")
-	// t.Logf("Found %d endpoints that support 'list'", len(listableEndpoints))
-
 	// // Test common endpoints
 	// commonEndpoints := discovery.GetCommonEndpoints(endpoints)
 	// t.Logf("Found %d common endpoints", len(commonEndpoints))

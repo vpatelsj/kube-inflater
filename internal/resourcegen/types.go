@@ -3,7 +3,6 @@ package resourcegen
 import (
 	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -45,18 +44,6 @@ func CommonLabels(runID, resourceType string) map[string]string {
 // ResourceName generates a deterministic name for a resource.
 func ResourceName(prefix, runID string, index int) string {
 	return fmt.Sprintf("%s-%s-%d", prefix, runID, index)
-}
-
-// CommonObjectMeta builds ObjectMeta with standard labels.
-func CommonObjectMeta(name, namespace, runID, resourceType string) metav1.ObjectMeta {
-	meta := metav1.ObjectMeta{
-		Name:   name,
-		Labels: CommonLabels(runID, resourceType),
-	}
-	if namespace != "" {
-		meta.Namespace = namespace
-	}
-	return meta
 }
 
 // KWOKNodeSelector returns the nodeSelector targeting KWOK fake nodes.
