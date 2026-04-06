@@ -9,3 +9,12 @@ api-performance-*.md
 .idea/
 .DS_Store
 watch-agent/watch-agent
+
+# Frontend
+ui/node_modules/
+ui/dist/
+benchmark-reports/
+benchmark-ui
+kube-resource-inflater
+perf-report
+watch-agent

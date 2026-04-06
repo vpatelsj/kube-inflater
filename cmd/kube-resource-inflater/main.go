@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"kube-inflater/internal/benchmarkio"
 	cfgpkg "kube-inflater/internal/config"
 	"kube-inflater/internal/inflater"
 	"kube-inflater/internal/kwok"
@@ -25,7 +26,7 @@ import (
 )
 
 func main() {
-	cfg, benchmarkReport, reportOutputDir := loadConfig()
+	cfg, benchmarkReport, jsonReport, reportOutputDir := loadConfig()
 
 	logInfo("🏗️  Starting kube-resource-inflater")
 	logInfo(fmt.Sprintf("Run ID: %s", cfg.RunID))
@@ -110,6 +111,11 @@ func main() {
 		generateBenchmarkReport(engine, clientset, restConfig, ctx, cfg, reportOutputDir)
 	}
 
+	// Generate JSON report for benchmark-ui
+	if jsonReport {
+		generateJSONReport(engine, clientset, restConfig, ctx, cfg, reportOutputDir)
+	}
+
 	logInfo("🏗️  kube-resource-inflater completed!")
 }
 
@@ -163,7 +169,45 @@ func generateBenchmarkReport(engine *inflater.Engine, clientset kubernetes.Inter
 	logInfo(fmt.Sprintf("Benchmark report written to %s", reportPath))
 }
 
-func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, reportOutputDir string) {
+func generateJSONReport(engine *inflater.Engine, clientset kubernetes.Interface, restConfig *rest.Config, ctx context.Context, cfg *cfgpkg.ResourceInflaterConfig, outputDir string) {
+	logInfo("Generating JSON benchmark report...")
+
+	bioCfg := benchmarkio.PodCreationConfig{
+		ResourceTypes:    cfg.ResourceTypes,
+		CountPerType:     cfg.CountPerType,
+		Workers:          cfg.Workers,
+		QPS:              cfg.QPS,
+		Burst:            cfg.Burst,
+		BatchInitial:     cfg.BatchInitial,
+		BatchFactor:      cfg.BatchFactor,
+		MaxBatches:       cfg.MaxBatches,
+		SpreadNamespaces: cfg.SpreadNamespaces,
+		DataSizeBytes:    cfg.DataSizeBytes,
+		KWOKNodes:        cfg.KWOKNodes,
+	}
+
+	reporter := perfv2.NewPerformanceReporter(clientset, restConfig, ctx, false)
+	clusterInfo := reporter.GatherClusterInfo()
+
+	var measurements []perfv2.LatencyMeasurement
+	if !cfg.SkipPerfTests {
+		logInfo("Running API performance tests for JSON report...")
+		var err error
+		measurements, err = reporter.RunPerformanceTest()
+		if err != nil {
+			logWarn(fmt.Sprintf("API performance test failed: %v", err))
+		}
+	}
+
+	path, err := benchmarkio.WritePodCreationReport(outputDir, cfg.RunID, bioCfg, engine.Results, &clusterInfo, measurements)
+	if err != nil {
+		logErr(fmt.Sprintf("Failed writing JSON report: %v", err))
+		return
+	}
+	logInfo(fmt.Sprintf("JSON benchmark report written to %s", path))
+}
+
+func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jsonReport bool, reportOutputDir string) {
 	cfg = &cfgpkg.ResourceInflaterConfig{
 		CountPerType:     cfgpkg.DefaultResourceCount,
 		Workers:          cfgpkg.DefaultWorkers,
@@ -201,6 +245,7 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, rep
 	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision (auto-scaled up if needed)")
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")
 	flag.BoolVar(&benchmarkReport, "benchmark-report", false, "Generate a combined benchmark report after resource creation")
+	flag.BoolVar(&jsonReport, "json-report", false, "Generate a JSON benchmark report (for benchmark-ui)")
 	flag.StringVar(&reportOutputDir, "report-output-dir", ".", "Directory to save the benchmark report")
 
 	flag.Parse()
@@ -234,7 +279,7 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, rep
 		cfg.RunID = fmt.Sprintf("%s-%04d", ts, suffix)
 	}
 
-	return cfg, benchmarkReport, reportOutputDir
+	return cfg, benchmarkReport, jsonReport, reportOutputDir
 }
 
 func parseCSV(s string) []string {
