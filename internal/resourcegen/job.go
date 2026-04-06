@@ -5,9 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type JobGenerator struct {
-	UseKWOK bool
-}
+type JobGenerator struct{}
 
 func (g *JobGenerator) Generate(runID, namespace string, index int) (*unstructured.Unstructured, error) {
 	name := ResourceName("job", runID, index)
@@ -59,10 +57,8 @@ func (g *JobGenerator) podSpec() map[string]interface{} {
 		},
 		"restartPolicy":                 "Never",
 		"terminationGracePeriodSeconds": int64(0),
-	}
-	if g.UseKWOK {
-		spec["nodeSelector"] = KWOKNodeSelector()
-		spec["tolerations"] = KWOKTolerations()
+		"nodeSelector":                  KWOKNodeSelector(),
+		"tolerations":                   KWOKTolerations(),
 	}
 	return spec
 }

@@ -5,9 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type PodGenerator struct {
-	UseKWOK bool
-}
+type PodGenerator struct{}
 
 func (g *PodGenerator) Generate(runID, namespace string, index int) (*unstructured.Unstructured, error) {
 	name := ResourceName("pod", runID, index)
@@ -45,10 +43,8 @@ func (g *PodGenerator) podSpec() map[string]interface{} {
 			},
 		},
 		"terminationGracePeriodSeconds": int64(0),
-	}
-	if g.UseKWOK {
-		spec["nodeSelector"] = KWOKNodeSelector()
-		spec["tolerations"] = KWOKTolerations()
+		"nodeSelector":                  KWOKNodeSelector(),
+		"tolerations":                   KWOKTolerations(),
 	}
 	return spec
 }

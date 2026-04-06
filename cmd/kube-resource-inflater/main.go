@@ -7,28 +7,34 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	cfgpkg "kube-inflater/internal/config"
 	"kube-inflater/internal/inflater"
 	"kube-inflater/internal/kwok"
+	"kube-inflater/internal/perfv2"
 	"kube-inflater/internal/resourcegen"
 )
 
 func main() {
-	cfg := loadConfig()
+	cfg, benchmarkReport, reportOutputDir := loadConfig()
 
 	logInfo("🏗️  Starting kube-resource-inflater")
 	logInfo(fmt.Sprintf("Run ID: %s", cfg.RunID))
 	logInfo(fmt.Sprintf("Resource types: %v", cfg.ResourceTypes))
 	logInfo(fmt.Sprintf("Count per type: %d | Workers: %d | QPS: %.0f | Burst: %d",
 		cfg.CountPerType, cfg.Workers, cfg.QPS, cfg.Burst))
+	if cfg.HasPodBearingTypes() {
+		logInfo("KWOK auto-enabled for pod-bearing resource types")
+	}
 
 	// Build clients
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -73,12 +79,10 @@ func main() {
 			logErr(fmt.Sprintf("Cleanup failed: %v", err))
 			os.Exit(1)
 		}
-		// Also clean KWOK nodes if enabled
-		if cfg.KWOKEnabled {
-			prov := kwok.NewProvisioner(clientset, dynClient, cfg.RunID, cfg.DryRun)
-			if err := prov.Cleanup(ctx, cfg.KWOKCleanup); err != nil {
-				logWarn(fmt.Sprintf("KWOK cleanup: %v", err))
-			}
+		// Also clean KWOK nodes if pod-bearing types were used
+		prov := kwok.NewProvisioner(clientset, dynClient, cfg.RunID, cfg.DryRun)
+		if err := prov.Cleanup(ctx, cfg.KWOKCleanup); err != nil {
+			logWarn(fmt.Sprintf("KWOK cleanup: %v", err))
 		}
 		return
 	}
@@ -101,11 +105,66 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Generate benchmark report if requested
+	if benchmarkReport {
+		generateBenchmarkReport(engine, clientset, restConfig, ctx, cfg, reportOutputDir)
+	}
+
 	logInfo("🏗️  kube-resource-inflater completed!")
 }
 
-func loadConfig() *cfgpkg.ResourceInflaterConfig {
-	cfg := &cfgpkg.ResourceInflaterConfig{
+func generateBenchmarkReport(engine *inflater.Engine, clientset kubernetes.Interface, restConfig *rest.Config, ctx context.Context, cfg *cfgpkg.ResourceInflaterConfig, outputDir string) {
+	logInfo("Generating benchmark report...")
+
+	report := &perfv2.BenchmarkReport{
+		RunID:            cfg.RunID,
+		ResourceTypes:    cfg.ResourceTypes,
+		CountPerType:     cfg.CountPerType,
+		Workers:          cfg.Workers,
+		QPS:              cfg.QPS,
+		Burst:            cfg.Burst,
+		SpreadNamespaces: cfg.SpreadNamespaces,
+		KWOKNodes:        cfg.KWOKNodes,
+		InflationResults: engine.Results,
+	}
+
+	// Gather cluster info
+	reporter := perfv2.NewPerformanceReporter(clientset, restConfig, ctx, false)
+	clusterInfo := reporter.GatherClusterInfo()
+	report.ClusterInfo = &clusterInfo
+
+	// Run API latency tests
+	logInfo("Running API performance tests...")
+	measurements, err := reporter.RunPerformanceTest()
+	if err != nil {
+		logWarn(fmt.Sprintf("API performance test failed: %v (report will be generated without API metrics)", err))
+	} else {
+		report.APIMeasurements = measurements
+	}
+
+	// Write report
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		logErr(fmt.Sprintf("Failed creating output directory: %v", err))
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	filename := fmt.Sprintf("benchmark-report-%s-%s.md", cfg.RunID, timestamp)
+	reportPath := filepath.Join(outputDir, filename)
+
+	f, err := os.Create(reportPath)
+	if err != nil {
+		logErr(fmt.Sprintf("Failed creating report file: %v", err))
+		return
+	}
+	defer f.Close()
+
+	report.RenderMarkdown(f)
+	logInfo(fmt.Sprintf("Benchmark report written to %s", reportPath))
+}
+
+func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, reportOutputDir string) {
+	cfg = &cfgpkg.ResourceInflaterConfig{
 		CountPerType:     cfgpkg.DefaultResourceCount,
 		Workers:          cfgpkg.DefaultWorkers,
 		QPS:              cfgpkg.DefaultQPS,
@@ -139,9 +198,10 @@ func loadConfig() *cfgpkg.ResourceInflaterConfig {
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Log what would be created without creating resources")
 	flag.BoolVar(&cfg.CleanupOnly, "cleanup-only", false, "Only delete resources from a previous run")
 	flag.StringVar(&cfg.RunID, "run-id", "", "Run ID (for cleanup; auto-generated if empty)")
-	flag.BoolVar(&cfg.KWOKEnabled, "kwok", false, "Use KWOK fake nodes for pods/jobs/statefulsets (avoids real kubelet load)")
-	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision")
+	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision (auto-scaled up if needed)")
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")
+	flag.BoolVar(&benchmarkReport, "benchmark-report", false, "Generate a combined benchmark report after resource creation")
+	flag.StringVar(&reportOutputDir, "report-output-dir", ".", "Directory to save the benchmark report")
 
 	flag.Parse()
 
@@ -174,7 +234,7 @@ func loadConfig() *cfgpkg.ResourceInflaterConfig {
 		cfg.RunID = fmt.Sprintf("%s-%04d", ts, suffix)
 	}
 
-	return cfg
+	return cfg, benchmarkReport, reportOutputDir
 }
 
 func parseCSV(s string) []string {

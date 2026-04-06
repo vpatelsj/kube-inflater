@@ -3,6 +3,8 @@ package resourcegen
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestAllGeneratorsProduceValidObjects(t *testing.T) {
@@ -145,5 +147,64 @@ func TestCRDGenerator(t *testing.T) {
 	}
 	if cr.GetKind() != CRDKind {
 		t.Errorf("CR kind: got %q, want %q", cr.GetKind(), CRDKind)
+	}
+}
+
+func TestPodBearingGeneratorsAlwaysHaveKWOKSelectors(t *testing.T) {
+	podBearingTypes := []string{"pods", "jobs", "statefulsets"}
+	runID := "test-run-kwok"
+
+	for _, typeName := range podBearingTypes {
+		t.Run(typeName, func(t *testing.T) {
+			gen, err := NewGenerator(typeName, 0)
+			if err != nil {
+				t.Fatalf("NewGenerator(%q): %v", typeName, err)
+			}
+
+			obj, err := gen.Generate(runID, "test-ns", 0)
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+
+			// Find the pod spec depending on resource type
+			var podSpec map[string]interface{}
+			switch typeName {
+			case "pods":
+				spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
+				podSpec = spec
+			case "jobs":
+				spec, _, _ := unstructured.NestedMap(obj.Object, "spec", "template", "spec")
+				podSpec = spec
+			case "statefulsets":
+				spec, _, _ := unstructured.NestedMap(obj.Object, "spec", "template", "spec")
+				podSpec = spec
+			}
+
+			if podSpec == nil {
+				t.Fatal("pod spec not found")
+			}
+
+			// Verify KWOK nodeSelector
+			ns, ok := podSpec["nodeSelector"]
+			if !ok {
+				t.Error("nodeSelector missing — KWOK scheduling not enforced")
+			} else {
+				nsMap, _ := ns.(map[string]interface{})
+				if nsMap["type"] != "kwok" {
+					t.Errorf("nodeSelector type: got %v, want \"kwok\"", nsMap["type"])
+				}
+			}
+
+			// Verify KWOK tolerations
+			tols, ok := podSpec["tolerations"]
+			if !ok {
+				t.Error("tolerations missing — KWOK scheduling not enforced")
+			} else {
+				tolSlice, _ := tols.([]interface{})
+				if len(tolSlice) == 0 {
+					t.Error("tolerations is empty")
+				}
+			}
+		})
 	}
 }

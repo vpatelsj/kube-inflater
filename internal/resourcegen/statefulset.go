@@ -5,9 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type StatefulSetGenerator struct {
-	UseKWOK bool
-}
+type StatefulSetGenerator struct{}
 
 func (g *StatefulSetGenerator) Generate(runID, namespace string, index int) (*unstructured.Unstructured, error) {
 	name := ResourceName("sts", runID, index)
@@ -32,10 +30,6 @@ func (g *StatefulSetGenerator) Generate(runID, namespace string, index int) (*un
 }
 
 func (g *StatefulSetGenerator) stsSpec(name string, selectorLabels map[string]interface{}) map[string]interface{} {
-	replicas := int64(0)
-	if g.UseKWOK {
-		replicas = 1 // safe to run pods on KWOK fake nodes
-	}
 	podSpec := map[string]interface{}{
 		"containers": []interface{}{
 			map[string]interface{}{
@@ -50,13 +44,11 @@ func (g *StatefulSetGenerator) stsSpec(name string, selectorLabels map[string]in
 			},
 		},
 		"terminationGracePeriodSeconds": int64(0),
-	}
-	if g.UseKWOK {
-		podSpec["nodeSelector"] = KWOKNodeSelector()
-		podSpec["tolerations"] = KWOKTolerations()
+		"nodeSelector":                  KWOKNodeSelector(),
+		"tolerations":                   KWOKTolerations(),
 	}
 	return map[string]interface{}{
-		"replicas":    replicas,
+		"replicas":    int64(1),
 		"serviceName": name,
 		"selector": map[string]interface{}{
 			"matchLabels": selectorLabels,
