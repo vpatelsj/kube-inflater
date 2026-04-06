@@ -1,299 +1,215 @@
-# kube-inflater 🎈
+# kube-inflater
 
-A **simplified** Kubernetes scalability exerciser that inflates your cluster with hollow (kubemark) nodes using DaemonSets. A DaemonSet is scheduled on every eligible node; each pod runs multiple kubemark containers, so the total hollow-node count is `(scheduled pods) × (containers-per-pod)`. The tool waits for readiness and measures API responsiveness.
+A Kubernetes scalability and stress-testing toolkit. Inflate clusters with hollow (kubemark) nodes, bulk-create API resources, stress-test the watch subsystem, benchmark API server latency, and probe etcd — all from a single repo.
+
+## Tools
+
+| Binary | Purpose |
+|---|---|
+| `kube-inflater` | Deploy DaemonSets of kubemark containers to register hollow nodes |
+| `kube-resource-inflater` | Bulk-create ConfigMaps, Secrets, Pods, Jobs, StatefulSets, CRDs, etc. with optional KWOK scheduling |
+| `watch-agent` | Open thousands of concurrent watch connections and measure event throughput / delivery latency |
+| `perf-report` | Auto-discover API endpoints and generate a markdown performance report |
+| `cleanup-nodes` | Surgically remove zombie nodes, NotReady nodes, and problematic pods |
+| `analyze-notready` | Correlate NotReady hollow nodes with their physical hosts |
+| `discover-endpoints` | List all API server resource endpoints with verb support |
+| `etcd-tester` | Connectivity and write-performance testing against etcd (separate Go module) |
 
 ## Quick Start
 
-### 1. Build
 ```bash
-# Using Mage (recommended)
+# Install Mage (recommended build tool)
 go install github.com/magefile/mage@latest
-mage build
 
-# Or with plain Go
-go mod tidy
+# Build everything
+mage build              # kube-inflater
+mage resourceInflater   # kube-resource-inflater
+mage cleanupNodes       # cleanup-nodes
+mage etcdTester         # etcd-tester
+
+# Or build individually with plain Go
 go build -o bin/kube-inflater ./cmd/kube-inflater
 ```
 
-### 2. Inflate Your Cluster! 
+## kube-inflater — Hollow Node Inflation
+
+Deploys a DaemonSet to the `kubemark-incremental-test` namespace. Each pod runs N kubemark containers, so total hollow nodes = `scheduled pods × --containers-per-pod`. The tool waits for all nodes to register Ready, then optionally measures API latency.
+
 ```bash
-# Inflate cluster with default settings (5 containers per pod on every eligible node)
+# Default: 5 containers per pod on every eligible node
 ./bin/kube-inflater
 
-# Use 10 kubemark containers per pod for higher hollow-node density
+# Higher density
 ./bin/kube-inflater --containers-per-pod 10
 
-# Give the daemonset a specific name
-./bin/kube-inflater --daemonset-name my-test-run
-```
+# Custom name, skip perf tests
+./bin/kube-inflater --daemonset-name my-run --skip-perf-tests
 
-### 3. Generate Performance Report (Optional)
-```bash
-# Generate comprehensive API performance report
-./bin/perf-report
-
-# Generate report with only common endpoints (faster)
-./bin/perf-report --only-common
-
-# Save report to specific directory
-./bin/perf-report --output-dir /tmp/perf-reports
-```
-
-### 4. Deflate When Done
-```bash
+# Cleanup
 ./bin/kube-inflater --cleanup-only
 ```
 
-## How It Works
+<details>
+<summary>All flags</summary>
 
-The tool automatically:
+| Flag | Default | Description |
+|---|---|---|
+| `--containers-per-pod` | 5 | Kubemark containers per DaemonSet pod |
+| `--daemonset-name` | auto | Name for the DaemonSet (timestamp + random suffix) |
+| `--timeout` | 3000 | Seconds to wait for nodes to become Ready |
+| `--perf-wait` | 30 | Seconds to settle before performance measurement |
+| `--perf-tests` | 5 | Number of API calls for latency measurement |
+| `--skip-perf-tests` | false | Skip performance measurement entirely |
+| `--cleanup-only` | false | Delete test resources and exit |
+| `--prune-previous` | false | Delete older DaemonSets before creating a new one |
+| `--retain-daemonsets` | 1 | Number of recent DaemonSets to keep when pruning |
+| `--node-status-frequency` | 60s | Kubelet node-status update interval |
+| `--node-lease-duration` | 240 | Node lease duration in seconds |
+| `--node-monitor-grace` | 240s | Controller-manager grace period |
+| `--token-audiences` | K8s defaults | Comma-separated SA token audiences |
 
-1. **Creates DaemonSet**: A DaemonSet named `hollow-nodes-<timestamp>-<suffix>` (or a custom name via `--daemonset-name`) is deployed to the `kubemark-incremental-test` namespace
-2. **Schedules on Eligible Nodes**: The DaemonSet schedules a pod on every eligible node; each pod runs `--containers-per-pod` kubemark containers
-3. **Inflates Cluster**: Monitors hollow node registration until all expected nodes (`pods × containers-per-pod`) are ready
-4. **Measures Performance**: Tests API response times under inflated load
-5. **Reports Results**: Shows timing and node status
+Env vars supported: `CONTAINERS_PER_POD`, `WAIT_TIMEOUT`, `PERFORMANCE_WAIT`, etc.
 
-Example run:
-```
-🎈 [INFO] Starting kube-inflater - expanding your cluster capacity!
-[INFO] Configuration: Timeout=50m0s ContainersPerPod=5
-[INFO] Creating daemonset hollow-nodes-20260306-143012-0042 (containersPerPod=5)
-[INFO] Successfully created daemonset
-[INFO] 🎈 Inflating cluster (DaemonSet mode). Node count derives from daemonset pods * containers-per-pod.
-[INFO] [INFLATE] Expected hollow nodes (pods * containersPerPod): 15
-[INFO] [INFLATE] Ready hollow nodes: 15 / 15
-[INFO] 🎈 [FULL] All expected hollow nodes registered
-🎈 [GAUGE] Performance Results:
-🎈 [GAUGE]   Average per call: 85.30ms
-🎈 [INFO] kube-inflater completed successfully! Cluster fully inflated!
-```
+</details>
 
-## Performance Report Generator
+### Large-Scale Inflation
 
-The `perf-report` tool generates comprehensive Kubernetes API performance reports by testing various endpoints and measuring response times. This is useful for understanding your cluster's API server performance characteristics.
+The included `inflate-250k.sh` script incrementally deploys up to 50 DaemonSets (10 containers each) to scale a cluster toward 250k+ hollow nodes. It is reentrant — it detects existing `hollow-step-N` DaemonSets and resumes.
 
-### Features
-- **Automatic Endpoint Discovery**: Scans all available Kubernetes API endpoints
-- **Performance Measurement**: Tests response times for GET operations across different resource types
-- **Markdown Report**: Generates a detailed report with timing statistics and cluster information
-- **Flexible Options**: Test all endpoints or just common ones for faster execution
+## kube-resource-inflater — Bulk Resource Creation
 
-### Usage Examples
-```bash
-# Full performance report (tests all discovered endpoints)
-./bin/perf-report
+Creates thousands of Kubernetes resources across spread namespaces using exponential batching and a configurable worker pool.
 
-# Quick report with only common endpoints (pods, services, nodes, etc.)
-./bin/perf-report --only-common
-
-# Save report to custom location
-./bin/perf-report --output-dir /tmp/cluster-reports
-
-# Use custom kubeconfig
-./bin/perf-report --kubeconfig /path/to/kubeconfig
-```
-
-### Generated Report
-The tool creates a markdown file named `api-performance-<cluster-name>-<timestamp>.md` containing:
-- **Cluster Information**: Version, node count, resource summary
-- **Performance Summary**: Statistics for all tested endpoints
-- **Detailed Results**: Response times, success rates, and error analysis
-- **Recommendations**: Performance insights and optimization suggestions
-
-This is particularly useful for:
-- 🔍 **Cluster Health Assessment**: Understanding API server responsiveness
-- 📊 **Performance Baseline**: Establishing performance benchmarks
-- 🚀 **Scale Testing**: Measuring impact of increased hollow node counts
-- 🔧 **Troubleshooting**: Identifying slow or problematic API endpoints
-
-## Configuration Options
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--containers-per-pod` | Number of kubemark containers (nodes) per pod | 5 |
-| `--daemonset-name` | Name for the hollow node daemonset | Auto-generated |
-| `--timeout` | Seconds to wait for nodes to become ready | 3000 |
-| `--perf-wait` | Seconds to wait before measuring performance | 30 |
-| `--perf-tests` | Number of API calls to test for performance | 5 |
-| `--skip-perf-tests` | Skip performance tests entirely | false |
-| `--cleanup-only` | Only cleanup test resources and exit | false |
-| `--prune-previous` | Prune older hollow-node daemonsets before creating a new one | false |
-| `--retain-daemonsets` | Number of most recent daemonsets to retain (includes the new one) | 1 |
-| `--auto-expected` | Compute expected hollow nodes from daemonset pods × containers-per-pod | true |
-| `--node-status-frequency` | Kubelet node status update frequency | "60s" |
-| `--node-lease-duration` | Node lease duration (seconds) | 120 |
-| `--node-monitor-grace` | Node monitor grace period | "240s" |
-| `--token-audiences` | Comma-separated ServiceAccount token audiences | Default K8s audiences |
-
-Environment variables are supported using uppercase names with underscores (e.g., `CONTAINERS_PER_POD`, `TIMEOUT`).
-
-## Container Image
-
-The tool uses the optimized kubemark image from Azure Container Registry:
-- **Image**: `k3sacr1.azurecr.io/kubemark:node-heartbeat-optimized-latest`
-- **Anonymous Pull**: Enabled (no authentication required)
-- **Features**: Heart-beat optimized, distroless base, direct binary execution
-
-## Examples
-
-### Small Test (Development)
-```bash
-# Quick test with default 5 containers per pod, short perf wait
-./bin/kube-inflater --perf-wait 10 --perf-tests 3
-```
-
-### Higher Density
-```bash
-# Use more containers per pod for higher hollow-node density
-./bin/kube-inflater --containers-per-pod 10
-```
-
-### Lower Density
-```bash
-# Use fewer containers per pod for lighter per-node load
-./bin/kube-inflater --containers-per-pod 2
-```
-
-### Extended Timeout for Large Clusters
-```bash
-# Allow more time for all nodes to register
-./bin/kube-inflater --timeout 1800
-```
-
-### Skip Performance Testing
-```bash
-# Add nodes without performance testing (faster)
-./bin/kube-inflater --skip-perf-tests
-```
-
-### Prune Previous Runs
-```bash
-# Delete older daemonsets before creating a new one (retain the latest 2)
-./bin/kube-inflater --prune-previous --retain-daemonsets 2
-```
-
-## Monitoring & Output
-
-The tool provides real-time progress updates:
-
-- **🏗️ DaemonSet Creation**: Shows which daemonset is being created
-- **⏳ Node Readiness**: Live count of ready nodes vs. expected
-- **📊 Performance Metrics**: API response times and statistics
-- **✅ Success Confirmation**: Clear completion status
-
-Example pattern:
-```
-Run 1: Creates hollow-nodes-20260306-143012-0042 (5 containers per pod on each eligible node)
-Run 2: Creates hollow-nodes-20260306-150000-1234 (same or different containers-per-pod)
-```
-
-Check your daemonsets:
-```bash
-kubectl get daemonsets -n kubemark-incremental-test
-kubectl get pods -n kubemark-incremental-test
-kubectl get nodes -l kubemark=true
-```
-
-## Cleanup
-
-Always clean up after testing to avoid cluster resource waste:
+**Supported resource types:** `configmaps`, `secrets`, `services`, `namespaces`, `pods`, `serviceaccounts`, `jobs`, `statefulsets`, `customresources`
 
 ```bash
-# Cleanup all test resources
-./bin/kube-inflater --cleanup-only
+# 1000 ConfigMaps and Secrets (default settings)
+./bin/kube-resource-inflater --resource-types=configmaps,secrets --count=1000
 
-# Or manual cleanup
-kubectl delete namespace kubemark-incremental-test
-kubectl delete nodes -l kubemark=true
+# 100k ConfigMaps, high throughput
+./bin/kube-resource-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200
+
+# Schedule pods on KWOK fake nodes instead of real kubelets
+./bin/kube-resource-inflater --resource-types=pods --count=5000 --kwok --kwok-nodes=10
+
+# Preview without creating anything
+./bin/kube-resource-inflater --resource-types=configmaps --count=100 --dry-run
+
+# Cleanup a specific run
+./bin/kube-resource-inflater --cleanup-only --run-id=<id>
 ```
 
-## Troubleshooting
+## watch-agent — Watch Stress Testing
 
-### Common Issues
-
-**Build Errors**: 
-- Ensure Go 1.19+ is installed
-- Run `go mod tidy` before building
-- Use `mage build` for reliable builds
-
-**Pod Startup Issues**: 
-- Check cluster has sufficient resources
-- Verify image pull from ACR works: `kubectl run test --image=k3sacr1.azurecr.io/kubemark:node-heartbeat-optimized-latest`
-- Check pod logs: `kubectl logs -n kubemark-incremental-test <pod-name>`
-
-**Node Registration Issues**:
-- Ensure ServiceAccount and ClusterRoleBinding exist (auto-created)
-- Check node status: `kubectl describe node <node-name>`
-- Verify token audiences are correct for your cluster
-
-### Debugging Commands
+Opens concurrent watch connections against the API server and measures event delivery latency, throughput, and reconnect behavior. Ships as a container image for in-cluster deployment via Kubernetes Jobs.
 
 ```bash
-# Check deployments
-kubectl get deployments -n kubemark-incremental-test
+# Build the container image
+docker build -f Dockerfile.watch-agent -t watch-agent:latest .
 
-# Check pod status  
-kubectl get pods -n kubemark-incremental-test
+# Local standalone test
+./bin/watch-agent watch --connections=100 --duration=60 --resource-type=customresources
 
-# Check hollow nodes
-kubectl get nodes -l kubemark=true -o wide
-
-# Check ServiceAccount setup
-kubectl get sa,clusterrolebinding -n kubemark-incremental-test
-
-# View pod details
-kubectl describe pod -n kubemark-incremental-test <pod-name>
+# Mutator mode: create/update/delete resources to generate watch events
+./bin/watch-agent mutate --rate=100 --duration=300 --batch-size=50
 ```
 
-## Architecture
+Deployment manifests live in `deploy/watch-agent/` — a Job template, RBAC, and a FlowSchema for priority-level exemption. The companion script `scripts/watch-ramp-cluster.sh` automates multi-round ramp-up testing.
 
-The simplified tool consists of focused modules:
+## perf-report — API Performance Reports
 
-- **`cmd/kube-inflater/main.go`**: Main CLI application with simple orchestration
-- **`internal/config/types.go`**: Simple configuration with DaemonSet and performance settings
-- **`internal/daemonsetspec/`**: Kubernetes DaemonSet specs for hollow nodes  
-- **`internal/nodes/`**: Node listing and management via client-go
-- **`internal/naming/`**: Node naming utilities
-- **`internal/perf/`** & **`internal/perfv2/`**: Performance measurement
+Auto-discovers all API server endpoints and benchmarks GET latency. Outputs a timestamped markdown report.
 
-### Key Design Principles
-
-- **🎯 Simplicity First**: Deploy a DaemonSet and let Kubernetes schedule across eligible nodes
-- **🔢 Auto-generated Names**: Unique daemonset names with timestamp + random suffix  
-- **📦 DaemonSet-based**: Uses Kubernetes DaemonSets for automatic node-level scheduling
-- **🚀 Anonymous Pull**: No registry authentication required
-- **⚡ Direct Execution**: No shell dependencies, pure Go binary execution
-
-## Development
-
-### Running Tests
 ```bash
-go test ./...                    # All tests
-go test -cover ./...            # With coverage  
-go test ./internal/config       # Specific package
+./bin/perf-report                              # Full report
+./bin/perf-report --only-common                # Only common resources (faster)
+./bin/perf-report --no-limits                  # Download full resource lists (caution on large clusters)
+./bin/perf-report --output-dir /tmp/reports    # Custom output directory
 ```
 
-### Building
+## cleanup-nodes — Node & Pod Cleanup
+
+Targeted cleanup of hollow/kubemark nodes and pods with concurrent deletion and rate-limit controls.
+
 ```bash
-mage -l                         # List available targets
-mage build                      # Build binary
-mage test                       # Run tests
-mage clean                      # Clean artifacts
+./bin/cleanup-nodes --dry-run                          # Preview
+./bin/cleanup-nodes --zombie-only --force               # Remove nodes without backing pods
+./bin/cleanup-nodes --notready-only --force             # Remove NotReady nodes
+./bin/cleanup-nodes -l kubemark=true                    # Delete all nodes matching label
+./bin/cleanup-nodes --include-pods --pending-only       # Also clean Pending pods
+./bin/cleanup-nodes --concurrency=50 --delay=5          # Tune deletion speed
 ```
 
-### Making Changes
+## etcd-tester
 
-1. **Keep it simple**: The goal is minimal complexity
-2. **Test thoroughly**: Verify with different node counts
-3. **Update docs**: Keep README in sync with changes
-4. **Follow Go conventions**: Use `go fmt` and `go vet`
+A separate Go module (`etcd-tester/`) for direct etcd connectivity and write-throughput testing.
+
+```bash
+mage etcdTester
+./bin/etcd-tester localhost:2379                  # Connectivity checks
+./bin/etcd-tester perf localhost:2379 1000 5      # 1000 simulated nodes, 5-minute run
+```
+
+## Project Layout
+
+```
+cmd/
+  kube-inflater/          Hollow node inflation CLI
+  kube-resource-inflater/ Bulk resource creation CLI
+  kube-pressure-cooker/   Combined inflation variant
+  watch-agent/            Watch stress agent (watch + mutate subcommands)
+  perf-report/            API latency report generator
+  cleanup-nodes/          Node/pod cleanup utility
+  analyze-notready/       NotReady node analyzer
+  discover-endpoints/     API endpoint lister
+internal/
+  config/                 Shared configuration types and defaults
+  inflater/               Resource creation engine with exponential batching
+  resourcegen/            Per-type resource generators (ConfigMap, Secret, Pod, CRD, …)
+  plan/                   Batch-size planning (exponential growth)
+  kwok/                   KWOK controller provisioning and fake-node management
+  daemonsetspec/          DaemonSet spec builder for kubemark pods
+  deploymentspec/         Deployment spec builder
+  podspec/                Pod spec helpers
+  nodes/                  Node listing and filtering
+  naming/                 Hollow-node naming utilities
+  perf/                   Legacy performance stats
+  perfv2/                 Endpoint discovery and performance reporter
+  watchstress/            Watch connection manager and resource mutator
+deploy/
+  watch-agent/            Kubernetes manifests (Job, RBAC, FlowSchema)
+etcd-tester/              Standalone etcd test module
+scripts/                  Operational shell scripts
+```
+
+## Build Targets (Mage)
+
+```bash
+mage -l                    # List all targets
+mage build                 # Build kube-inflater
+mage resourceInflater      # Build kube-resource-inflater
+mage cleanupNodes          # Build cleanup-nodes
+mage etcdTester            # Build etcd-tester
+mage perfReport            # Build & run perf-report (latency mode)
+mage perfReportFull        # Build & run perf-report (full data mode)
+mage analyzeNotReady       # Build & run NotReady analyzer
+mage test                  # Run all unit tests
+mage clean                 # Remove bin/
+```
 
 ## Requirements
 
-- **Go**: 1.19 or later
-- **Kubernetes**: 1.20+ cluster with RBAC enabled  
-- **Access**: Valid kubeconfig with cluster-admin or equivalent permissions
-- **Resources**: Sufficient cluster capacity for desired node count
-- **Network**: Access to `k3sacr1.azurecr.io` (anonymous pull enabled)
+- **Go** 1.23+
+- **Kubernetes** 1.20+ with RBAC
+- **kubeconfig** with cluster-admin or equivalent permissions
+- **Network** access to `k3sacr1.azurecr.io` for kubemark images (anonymous pull)
+
+## Debugging
+
+```bash
+kubectl get daemonsets -n kubemark-incremental-test
+kubectl get pods -n kubemark-incremental-test
+kubectl get nodes -l kubemark=true -o wide
+kubectl describe pod -n kubemark-incremental-test <pod>
+```
 
