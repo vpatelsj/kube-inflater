@@ -14,6 +14,7 @@ A Kubernetes scalability and stress-testing toolkit. Inflate clusters with hollo
 | `analyze-notready` | Correlate NotReady hollow nodes with their physical hosts |
 | `discover-endpoints` | List all API server resource endpoints with verb support |
 | `etcd-tester` | Connectivity and write-performance testing against etcd (separate Go module) |
+| `benchmark-ui` | Web UI for viewing benchmark results with interactive charts and PDF export |
 
 ## Quick Start
 
@@ -159,6 +160,33 @@ mage etcdTester
 ./bin/etcd-tester perf localhost:2379 1000 5      # 1000 simulated nodes, 5-minute run
 ```
 
+## benchmark-ui — Benchmark Visualization
+
+A local web application for viewing benchmark results with interactive charts and PDF export. Reads JSON report files produced by the CLI tools.
+
+```bash
+# Generate JSON reports during benchmark runs
+./bin/kube-resource-inflater --resource-types=pods --count=5000 \
+  --json-report --report-output-dir=./benchmark-reports
+
+./bin/perf-report --json --output-dir=./benchmark-reports
+
+./bin/watch-agent watch --connections=100 --duration=60 \
+  --json-report-dir=./benchmark-reports
+
+# Build and run the UI
+mage benchmarkUI
+cd ui && npm install && npm run build && cd ..
+./bin/benchmark-ui --reports-dir=./benchmark-reports --port=8080
+```
+
+**Report types and charts:**
+- **Pod Creation** — batch throughput bars, cumulative creation line, failure rate per batch
+- **Watch Stress** — latency breakdown, connection scaling (dual-axis events/sec + connect latency)
+- **API Latency** — top-N slowest endpoints, response-size-vs-latency scatter, latency histogram, full results table
+
+Each report page includes a PDF export button.
+
 ## Project Layout
 
 ```
@@ -198,6 +226,8 @@ mage build                 # Build kube-inflater
 mage resourceInflater      # Build kube-resource-inflater
 mage cleanupNodes          # Build cleanup-nodes
 mage etcdTester            # Build etcd-tester
+mage benchmarkUI           # Build benchmark-ui server
+mage frontendBuild         # Build frontend (npm run build in ui/)
 mage perfReport            # Build & run perf-report (latency mode)
 mage perfReportFull        # Build & run perf-report (full data mode)
 mage analyzeNotReady       # Build & run NotReady analyzer

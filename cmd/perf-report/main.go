@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 
+	"kube-inflater/internal/benchmarkio"
 	"kube-inflater/internal/perfv2"
 )
 
@@ -28,6 +29,7 @@ func main() {
 	outputDir := flag.String("output-dir", ".", "directory to save the performance report")
 	onlyCommon := flag.Bool("only-common", false, "test only common endpoints")
 	noLimits := flag.Bool("no-limits", false, "disable response size limits (WARNING: may return very large responses)")
+	jsonOutput := flag.Bool("json", false, "also output a JSON report for benchmark-ui")
 
 	flag.Parse()
 
@@ -122,6 +124,18 @@ func main() {
 	}
 
 	fmt.Printf("✅ Performance report saved to: %s\n", reportPath)
+
+	// Write JSON report for benchmark-ui
+	if *jsonOutput {
+		clusterInfo := reporter.GatherClusterInfo()
+		runID := fmt.Sprintf("perf-%s", timestamp)
+		jsonPath, jsonErr := benchmarkio.WriteAPILatencyReport(*outputDir, runID, &clusterInfo, measurements)
+		if jsonErr != nil {
+			fmt.Fprintf(os.Stderr, "Error writing JSON report: %v\n", jsonErr)
+		} else {
+			fmt.Printf("✅ JSON report saved to: %s\n", jsonPath)
+		}
+	}
 
 	// Print summary to console
 	successful := 0
