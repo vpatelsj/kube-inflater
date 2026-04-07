@@ -12,7 +12,7 @@ NAMESPACE="kubemark-incremental-test"
 TARGET=300000
 STEP_END=50
 CONTAINERS_PER_POD=10
-INFLATER_DIR="/home/vapa/dev/kube-inflater"
+INFLATER_DIR="/home/vapa/dev/kube-inflater-ci"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -72,12 +72,12 @@ for step in $(seq "$STEP_START" "$STEP_END"); do
   log "Nodes before: ${BEFORE}"
 
   ./bin/kube-inflater \
+    --resource-types=hollownodes \
+    --count=0 \
     --containers-per-pod "$CONTAINERS_PER_POD" \
     --node-lease-duration 240 \
     --node-status-frequency 60s \
-    --node-monitor-grace 240s \
-    --daemonset-name "$DS_NAME" \
-    --skip-perf-tests 2>&1
+    --node-monitor-grace 240s 2>&1
 
   # Wait for new hollow nodes to register
   log "Waiting for hollow nodes from ${DS_NAME} to register..."

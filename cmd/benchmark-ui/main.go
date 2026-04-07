@@ -122,7 +122,7 @@ func (rm *RunManager) executeRun(run *Run) {
 
 	switch run.Type {
 	case "pod-creation":
-		binary = filepath.Join(rm.binDir, "kube-resource-inflater")
+		binary = filepath.Join(rm.binDir, "kube-inflater")
 		args = rm.buildResourceInflaterArgs(run.Config)
 	case "api-latency":
 		binary = filepath.Join(rm.binDir, "perf-report")

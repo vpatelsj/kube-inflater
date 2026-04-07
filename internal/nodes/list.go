@@ -11,7 +11,7 @@ import (
 
 // ListKubemarkNodes returns names and the count of Ready nodes with label kubemark=true.
 // Uses unpaginated list to avoid stale resource-version issues during rapid node creation.
-func ListKubemarkNodes(ctx context.Context, client *kubernetes.Clientset) ([]string, int, error) {
+func ListKubemarkNodes(ctx context.Context, client kubernetes.Interface) ([]string, int, error) {
 	labelSel := labelsPkg.SelectorFromSet(labelsPkg.Set{"kubemark": "true"}).String()
 	lst, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: labelSel})
 	if err != nil {

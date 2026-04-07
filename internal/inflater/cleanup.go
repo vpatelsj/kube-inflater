@@ -31,6 +31,23 @@ func NewCleanup(client kubernetes.Interface, dynClient dynamic.Interface, cfg *c
 func (c *Cleanup) Run(ctx context.Context) error {
 	logInfo("Starting cleanup...")
 
+	// Clean up setup-based generators (e.g. hollownodes)
+	for _, typeName := range c.cfg.ResourceTypes {
+		opts := resourcegen.GeneratorOpts{
+			DataSizeBytes: c.cfg.DataSizeBytes,
+			HollowNode:    c.cfg.HollowNodeOpts,
+		}
+		gen, err := resourcegen.NewGeneratorWithOpts(typeName, opts)
+		if err != nil {
+			continue
+		}
+		if setupGen, ok := gen.(resourcegen.SetupTeardownGenerator); ok && setupGen.IsSetupBased() {
+			if err := setupGen.Teardown(ctx, c.client, c.dynClient, c.cfg.DryRun); err != nil {
+				logWarn(fmt.Sprintf("Error cleaning %s: %v", typeName, err))
+			}
+		}
+	}
+
 	labelSelector := fmt.Sprintf("app=%s", resourcegen.AppLabel)
 	if c.cfg.RunID != "" {
 		labelSelector += fmt.Sprintf(",%s=%s", resourcegen.RunIDLabel, c.cfg.RunID)

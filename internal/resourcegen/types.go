@@ -1,10 +1,14 @@
 package resourcegen
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -30,6 +34,26 @@ type ResourceGenerator interface {
 
 	// TypeName returns the short name used in --resource-types flag (e.g. "configmaps").
 	TypeName() string
+}
+
+// SetupTeardownGenerator is an optional interface for resource types that need
+// one-time setup/teardown (e.g., a DaemonSet that implicitly creates nodes)
+// rather than per-item creation via Generate().
+type SetupTeardownGenerator interface {
+	ResourceGenerator
+
+	// Setup performs one-time resource creation (SA, RBAC, DaemonSet, etc.).
+	// count is the total desired resources. Returns the number that will be created.
+	Setup(ctx context.Context, client kubernetes.Interface, dynClient dynamic.Interface, runID string, count int, dryRun bool) (int, error)
+
+	// WaitForReady blocks until all implicitly-created resources are ready.
+	WaitForReady(ctx context.Context, client kubernetes.Interface, timeout time.Duration) error
+
+	// Teardown removes resources created by Setup.
+	Teardown(ctx context.Context, client kubernetes.Interface, dynClient dynamic.Interface, dryRun bool) error
+
+	// IsSetupBased returns true — the engine skips per-item Generate() batching.
+	IsSetupBased() bool
 }
 
 // CommonLabels returns the standard labels applied to every generated resource.

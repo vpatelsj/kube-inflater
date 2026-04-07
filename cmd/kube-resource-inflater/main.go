@@ -248,6 +248,30 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.BoolVar(&jsonReport, "json-report", false, "Generate a JSON benchmark report (for benchmark-ui)")
 	flag.StringVar(&reportOutputDir, "report-output-dir", ".", "Directory to save the benchmark report")
 
+	// Hollow node flags (used when --resource-types includes "hollownodes")
+	hollowOpts := &cfgpkg.HollowNodeOpts{
+		ContainersPerPod:  cfgpkg.DefaultContainersPerPod,
+		KubemarkImage:     cfgpkg.DefaultKubemarkImage,
+		NodeStatusFreq:    "60s",
+		NodeLeaseDuration: 240,
+		NodeMonitorGrace:  "240s",
+		Namespace:         cfgpkg.DefaultNamespace,
+		WaitTimeout:       time.Duration(cfgpkg.DefaultWaitTimeoutSec) * time.Second,
+		RetainDaemonSets:  1,
+	}
+	flag.IntVar(&hollowOpts.ContainersPerPod, "containers-per-pod", hollowOpts.ContainersPerPod, "Kubemark containers (hollow nodes) per DaemonSet pod")
+	flag.StringVar(&hollowOpts.KubemarkImage, "kubemark-image", hollowOpts.KubemarkImage, "Kubemark container image")
+	flag.StringVar(&hollowOpts.NodeStatusFreq, "node-status-frequency", hollowOpts.NodeStatusFreq, "Kubelet node status update frequency")
+	flag.IntVar(&hollowOpts.NodeLeaseDuration, "node-lease-duration", hollowOpts.NodeLeaseDuration, "Node lease duration (seconds)")
+	flag.StringVar(&hollowOpts.NodeMonitorGrace, "node-monitor-grace", hollowOpts.NodeMonitorGrace, "Node monitor grace period")
+	flag.StringVar(&hollowOpts.Namespace, "hollow-namespace", hollowOpts.Namespace, "Namespace for hollow node DaemonSet and supporting resources")
+	hollowWaitSec := int(hollowOpts.WaitTimeout / time.Second)
+	flag.IntVar(&hollowWaitSec, "hollow-wait-timeout", hollowWaitSec, "Seconds to wait for hollow nodes to become ready")
+	flag.BoolVar(&hollowOpts.PrunePrevious, "prune-previous", false, "Prune older hollow-node DaemonSets before creating a new one")
+	flag.IntVar(&hollowOpts.RetainDaemonSets, "retain-daemonsets", hollowOpts.RetainDaemonSets, "Number of most recent hollow-node DaemonSets to retain when pruning")
+	tokenAudStr := ""
+	flag.StringVar(&tokenAudStr, "token-audiences", "", "Comma-separated ServiceAccount token audiences for hollow-node kubeconfig (default: auto)")
+
 	flag.Parse()
 
 	cfg.BatchPause = time.Duration(batchPauseSec) * time.Second
@@ -278,6 +302,14 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 		suffix := rand.Intn(10000)
 		cfg.RunID = fmt.Sprintf("%s-%04d", ts, suffix)
 	}
+
+	// Populate hollow node opts
+	hollowOpts.WaitTimeout = time.Duration(hollowWaitSec) * time.Second
+	if tokenAudStr != "" {
+		hollowOpts.TokenAudiences = parseCSV(tokenAudStr)
+	}
+	cfg.HollowNodeOpts = hollowOpts
+	cfg.HollowNodeWaitTimeout = hollowOpts.WaitTimeout
 
 	return cfg, benchmarkReport, jsonReport, reportOutputDir
 }

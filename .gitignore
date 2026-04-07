@@ -18,3 +18,4 @@ benchmark-ui
 kube-resource-inflater
 perf-report
 watch-agent
+kube-inflater
