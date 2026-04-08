@@ -83,6 +83,7 @@ Namespaced resources are distributed across `<namespace>-0` … `<namespace>-N` 
 ### KWOK auto-scaling
 When `HasPodBearingTypes()` is true, `Engine.EnsureKWOK` auto-scales `KWOKNodes` upward if the default is insufficient for the requested pod count. Formula: `kwok.NodesNeeded(totalPods)`.
 
+
 ### Kubemark image
 `k3sacr1.azurecr.io/kubemark:lease-csi-cache-v2` — anonymous pull from Azure ACR.
 
