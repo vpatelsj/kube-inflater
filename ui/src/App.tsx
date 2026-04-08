@@ -1,6 +1,6 @@
 import { Routes, Route, Link } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
-import PodCreationReport from './pages/PodCreationReport'
+import ResourceCreationReport from './pages/ResourceCreationReport'
 import WatchStressReport from './pages/WatchStressReport'
 import APILatencyReport from './pages/APILatencyReport'
 import NewRun from './pages/NewRun'
@@ -21,7 +21,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/new-run" element={<NewRun />} />
           <Route path="/run/:id" element={<RunMonitor />} />
-          <Route path="/report/pod-creation/:id" element={<PodCreationReport />} />
+          <Route path="/report/resource-creation/:id" element={<ResourceCreationReport />} />
           <Route path="/report/watch-stress/:id" element={<WatchStressReport />} />
           <Route path="/report/api-latency/:id" element={<APILatencyReport />} />
         </Routes>

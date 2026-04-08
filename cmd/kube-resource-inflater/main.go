@@ -106,6 +106,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Verify resources actually exist in the cluster
+	if err := engine.Verify(ctx); err != nil {
+		logErr(fmt.Sprintf("Verification failed: %v", err))
+		os.Exit(1)
+	}
+
 	// Generate benchmark report if requested
 	if benchmarkReport {
 		generateBenchmarkReport(engine, clientset, restConfig, ctx, cfg, reportOutputDir)
@@ -172,7 +178,7 @@ func generateBenchmarkReport(engine *inflater.Engine, clientset kubernetes.Inter
 func generateJSONReport(engine *inflater.Engine, clientset kubernetes.Interface, restConfig *rest.Config, ctx context.Context, cfg *cfgpkg.ResourceInflaterConfig, outputDir string) {
 	logInfo("Generating JSON benchmark report...")
 
-	bioCfg := benchmarkio.PodCreationConfig{
+	bioCfg := benchmarkio.ResourceCreationConfig{
 		ResourceTypes:    cfg.ResourceTypes,
 		CountPerType:     cfg.CountPerType,
 		Workers:          cfg.Workers,
@@ -199,7 +205,7 @@ func generateJSONReport(engine *inflater.Engine, clientset kubernetes.Interface,
 		}
 	}
 
-	path, err := benchmarkio.WritePodCreationReport(outputDir, cfg.RunID, bioCfg, engine.Results, &clusterInfo, measurements)
+	path, err := benchmarkio.WriteResourceCreationReport(outputDir, cfg.RunID, bioCfg, engine.Results, &clusterInfo, measurements)
 	if err != nil {
 		logErr(fmt.Sprintf("Failed writing JSON report: %v", err))
 		return
@@ -245,8 +251,8 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision (auto-scaled up if needed)")
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")
 	flag.BoolVar(&benchmarkReport, "benchmark-report", false, "Generate a combined benchmark report after resource creation")
-	flag.BoolVar(&jsonReport, "json-report", false, "Generate a JSON benchmark report (for benchmark-ui)")
-	flag.StringVar(&reportOutputDir, "report-output-dir", ".", "Directory to save the benchmark report")
+	flag.BoolVar(&jsonReport, "json-report", true, "Generate a JSON benchmark report (for benchmark-ui); use --json-report=false to disable")
+	flag.StringVar(&reportOutputDir, "report-output-dir", "./benchmark-reports", "Directory to save the benchmark report")
 
 	// Hollow node flags (used when --resource-types includes "hollownodes")
 	hollowOpts := &cfgpkg.HollowNodeOpts{

@@ -12,8 +12,8 @@ import (
 )
 
 // ParseMarkdownReport reads a markdown benchmark report file and converts it
-// to a PodCreationReport. Returns nil if the file cannot be parsed.
-func ParseMarkdownReport(path string) (*PodCreationReport, error) {
+// to a ResourceCreationReport. Returns nil if the file cannot be parsed.
+func ParseMarkdownReport(path string) (*ResourceCreationReport, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -29,8 +29,8 @@ func ParseMarkdownReport(path string) (*PodCreationReport, error) {
 		return nil, err
 	}
 
-	report := &PodCreationReport{}
-	report.Type = ReportPodCreation
+	report := &ResourceCreationReport{}
+	report.Type = ReportResourceCreation
 
 	// Parse header metadata
 	for _, line := range lines {
@@ -146,8 +146,8 @@ func splitTableRow(line string) []string {
 	return cols
 }
 
-func parseRunConfig(kv map[string]string) PodCreationConfig {
-	return PodCreationConfig{
+func parseRunConfig(kv map[string]string) ResourceCreationConfig {
+	return ResourceCreationConfig{
 		ResourceTypes:    []string{kv["Resource Types"]},
 		CountPerType:     atoi(kv["Count per Type"]),
 		Workers:          atoi(kv["Workers"]),

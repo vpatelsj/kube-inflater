@@ -149,7 +149,7 @@ export default function RunMonitor() {
       <div className="mt-4 flex gap-3">
         {status === 'completed' && reportID && (
           <button
-            onClick={() => navigate(reportRoute(run?.type as ReportType ?? 'pod-creation', reportID))}
+            onClick={() => navigate(reportRoute(run?.type as ReportType ?? 'resource-creation', reportID))}
             className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-500 transition-colors"
           >
             📊 View Report

@@ -9,6 +9,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -382,6 +383,127 @@ func (e *Engine) ensureCRD(ctx context.Context, gen *resourcegen.CRDGenerator) e
 		time.Sleep(3 * time.Second)
 	}
 	return nil
+}
+
+// Verify checks that the resources reported as created actually exist in the cluster.
+// It lists resources by run-id label and compares against the engine's inflation results.
+func (e *Engine) Verify(ctx context.Context) error {
+	if e.cfg.DryRun {
+		logInfo("[DRY-RUN] Skipping verification")
+		return nil
+	}
+
+	logInfo("🔍 Verifying created resources...")
+	labelSelector := fmt.Sprintf("%s=%s", resourcegen.RunIDLabel, e.cfg.RunID)
+	allPassed := true
+
+	for _, result := range e.Results {
+		opts := resourcegen.GeneratorOpts{
+			DataSizeBytes: e.cfg.DataSizeBytes,
+			HollowNode:    e.cfg.HollowNodeOpts,
+		}
+		gen, err := resourcegen.NewGeneratorWithOpts(result.ResourceType, opts)
+		if err != nil {
+			logWarn(fmt.Sprintf("  ✗ %s: cannot create generator: %v", result.ResourceType, err))
+			allPassed = false
+			continue
+		}
+
+		// Setup-based generators (hollownodes) — count nodes by label
+		if setupGen, ok := gen.(resourcegen.SetupTeardownGenerator); ok && setupGen.IsSetupBased() {
+			actual, err := e.countClusterResources(ctx, gen.GVR(), labelSelector)
+			if err != nil {
+				logWarn(fmt.Sprintf("  ✗ %s: verification failed: %v", result.ResourceType, err))
+				allPassed = false
+				continue
+			}
+			if actual == result.TotalCreated {
+				logInfo(fmt.Sprintf("  ✓ %s: %d expected, %d found", result.ResourceType, result.TotalCreated, actual))
+			} else {
+				logWarn(fmt.Sprintf("  ✗ %s: %d expected, %d found", result.ResourceType, result.TotalCreated, actual))
+				allPassed = false
+			}
+			continue
+		}
+
+		var actual int64
+		if gen.IsNamespaced() {
+			for i := 0; i < e.cfg.SpreadNamespaces; i++ {
+				ns := fmt.Sprintf("%s-%d", e.cfg.Namespace, i)
+				count, err := e.countNamespacedResources(ctx, gen.GVR(), ns, labelSelector)
+				if err != nil {
+					logWarn(fmt.Sprintf("  ✗ %s: error listing in %s: %v", result.ResourceType, ns, err))
+					allPassed = false
+					break
+				}
+				actual += count
+			}
+		} else {
+			count, err := e.countClusterResources(ctx, gen.GVR(), labelSelector)
+			if err != nil {
+				logWarn(fmt.Sprintf("  ✗ %s: verification failed: %v", result.ResourceType, err))
+				allPassed = false
+				continue
+			}
+			actual = count
+		}
+
+		if actual == result.TotalCreated {
+			logInfo(fmt.Sprintf("  ✓ %s: %d expected, %d found", result.ResourceType, result.TotalCreated, actual))
+		} else {
+			logWarn(fmt.Sprintf("  ✗ %s: %d expected, %d found (diff: %+d)", result.ResourceType, result.TotalCreated, actual, actual-result.TotalCreated))
+			allPassed = false
+		}
+	}
+
+	if allPassed {
+		logInfo("🔍 Verification passed — all resources confirmed")
+	} else {
+		logWarn("🔍 Verification found mismatches (see above)")
+	}
+	return nil
+}
+
+func (e *Engine) countNamespacedResources(ctx context.Context, gvr schema.GroupVersionResource, namespace, labelSelector string) (int64, error) {
+	var count int64
+	continueToken := ""
+	for {
+		list, err := e.dynClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+			Limit:         500,
+			Continue:      continueToken,
+		})
+		if err != nil {
+			return 0, err
+		}
+		count += int64(len(list.Items))
+		continueToken = list.GetContinue()
+		if continueToken == "" {
+			break
+		}
+	}
+	return count, nil
+}
+
+func (e *Engine) countClusterResources(ctx context.Context, gvr schema.GroupVersionResource, labelSelector string) (int64, error) {
+	var count int64
+	continueToken := ""
+	for {
+		list, err := e.dynClient.Resource(gvr).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+			Limit:         500,
+			Continue:      continueToken,
+		})
+		if err != nil {
+			return 0, err
+		}
+		count += int64(len(list.Items))
+		continueToken = list.GetContinue()
+		if continueToken == "" {
+			break
+		}
+	}
+	return count, nil
 }
 
 var nsGVR = (&resourcegen.NamespaceGenerator{}).GVR()

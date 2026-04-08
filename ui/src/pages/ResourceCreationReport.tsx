@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useReport } from '../hooks/useBenchmarkData'
-import type { PodCreationReport as PodCreationReportType } from '../types/benchmark'
+import type { ResourceCreationReport as ResourceCreationReportType } from '../types/benchmark'
 import ReportHeader from '../components/ReportHeader'
 import ClusterInfoCard from '../components/ClusterInfoCard'
 import PDFExportButton from '../components/PDFExportButton'
@@ -10,28 +10,28 @@ import CumulativeChart from '../components/charts/CumulativeChart'
 import FailureRateChart from '../components/charts/FailureRateChart'
 import LatencyBarChart from '../components/charts/LatencyBarChart'
 
-export default function PodCreationReport() {
+export default function ResourceCreationReport() {
   const { id } = useParams<{ id: string }>()
   const { report, loading, error } = useReport(id)
   const printRef = useRef<HTMLDivElement>(null)
 
   if (loading) return <p className="text-gray-500">Loading…</p>
   if (error) return <p className="text-red-600">Error: {error}</p>
-  if (!report || report.type !== 'pod-creation') return <p>Report not found</p>
+  if (!report || report.type !== 'resource-creation') return <p>Report not found</p>
 
-  const r = report as PodCreationReportType
+  const r = report as ResourceCreationReportType
   const cfg = r.config
 
   return (
     <div>
       <div className="flex items-center gap-4 mb-4">
         <Link to="/" className="text-sm text-blue-600 hover:underline">← Dashboard</Link>
-        <PDFExportButton targetRef={printRef} filename={`pod-creation-${r.runID}`} />
+        <PDFExportButton targetRef={printRef} filename={`${cfg.resourceTypes.join('-')}-${r.runID}`} />
       </div>
 
       <div ref={printRef}>
         <ReportHeader
-          title={`Pod Creation — ${r.runID}`}
+          title={`${cfg.resourceTypes.join(', ')} — ${r.runID}`}
           items={[
             { label: 'Timestamp', value: new Date(r.timestamp).toLocaleString() },
             { label: 'Resource Types', value: cfg.resourceTypes.join(', ') },

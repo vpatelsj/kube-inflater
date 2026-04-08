@@ -23,10 +23,10 @@ func ReadReport(path string) (interface{}, error) {
 	}
 
 	switch meta.Type {
-	case ReportPodCreation:
-		var r PodCreationReport
+	case ReportResourceCreation:
+		var r ResourceCreationReport
 		if err := json.Unmarshal(data, &r); err != nil {
-			return nil, fmt.Errorf("parsing pod-creation report: %w", err)
+			return nil, fmt.Errorf("parsing resource-creation report: %w", err)
 		}
 		return &r, nil
 	case ReportWatchStress:
@@ -111,13 +111,25 @@ func ListReportsFiltered(dir string, filterType ReportType) ([]ReportListItem, e
 			if filterType != "" && meta.Type != filterType {
 				continue
 			}
-			items = append(items, ReportListItem{
+			item := ReportListItem{
 				ID:        reportID(name),
 				Type:      meta.Type,
 				RunID:     meta.RunID,
 				Timestamp: meta.Timestamp,
 				Filename:  name,
-			})
+			}
+			// Extract resourceTypes for resource-creation reports
+			if meta.Type == ReportResourceCreation {
+				var partial struct {
+					Config struct {
+						ResourceTypes []string `json:"resourceTypes"`
+					} `json:"config"`
+				}
+				if json.Unmarshal(data, &partial) == nil {
+					item.ResourceTypes = partial.Config.ResourceTypes
+				}
+			}
+			items = append(items, item)
 		} else if strings.HasSuffix(name, ".md") {
 			report, err := ParseMarkdownReport(path)
 			if err != nil {
@@ -127,11 +139,12 @@ func ListReportsFiltered(dir string, filterType ReportType) ([]ReportListItem, e
 				continue
 			}
 			items = append(items, ReportListItem{
-				ID:        reportID(name),
-				Type:      report.Type,
-				RunID:     report.RunID,
-				Timestamp: report.Timestamp,
-				Filename:  name,
+				ID:            reportID(name),
+				Type:          report.Type,
+				RunID:         report.RunID,
+				Timestamp:     report.Timestamp,
+				Filename:      name,
+				ResourceTypes: report.Config.ResourceTypes,
 			})
 		}
 	}

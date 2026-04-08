@@ -22,16 +22,16 @@ import (
 
 // Run tracks a benchmark run launched from the UI.
 type Run struct {
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Status    string   `json:"status"` // pending, running, completed, failed
-	StartedAt string   `json:"startedAt"`
-	EndedAt   string   `json:"endedAt,omitempty"`
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	Status    string    `json:"status"` // pending, running, completed, failed
+	StartedAt string    `json:"startedAt"`
+	EndedAt   string    `json:"endedAt,omitempty"`
 	Config    RunConfig `json:"config"`
-	LogLines  []string `json:"logLines,omitempty"`
-	ReportID  string   `json:"reportID,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	CLIRunID  string   `json:"cliRunID,omitempty"` // run-id from the CLI tool (for cluster queries)
+	LogLines  []string  `json:"logLines,omitempty"`
+	ReportID  string    `json:"reportID,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CLIRunID  string    `json:"cliRunID,omitempty"` // run-id from the CLI tool (for cluster queries)
 
 	mu        sync.Mutex
 	cmd       *exec.Cmd
@@ -54,9 +54,9 @@ type RunConfig struct {
 	NoLimits   bool `json:"noLimits,omitempty"`
 
 	// Watch stress
-	Connections int    `json:"connections,omitempty"`
-	Duration    int    `json:"duration,omitempty"`
-	Stagger     int    `json:"stagger,omitempty"`
+	Connections  int    `json:"connections,omitempty"`
+	Duration     int    `json:"duration,omitempty"`
+	Stagger      int    `json:"stagger,omitempty"`
 	ResourceType string `json:"resourceType,omitempty"`
 }
 
@@ -121,7 +121,7 @@ func (rm *RunManager) executeRun(run *Run) {
 	var binary string
 
 	switch run.Type {
-	case "pod-creation":
+	case "resource-creation":
 		binary = filepath.Join(rm.binDir, "kube-inflater")
 		args = rm.buildResourceInflaterArgs(run.Config)
 	case "api-latency":
@@ -374,13 +374,13 @@ func handleRuns(rm *RunManager) http.HandlerFunc {
 			runs := rm.ListRuns()
 			// Strip log lines from list view for performance
 			type runSummary struct {
-				ID        string    `json:"id"`
-				Type      string    `json:"type"`
-				Status    string    `json:"status"`
-				StartedAt string    `json:"startedAt"`
-				EndedAt   string    `json:"endedAt,omitempty"`
-				ReportID  string    `json:"reportID,omitempty"`
-				Error     string    `json:"error,omitempty"`
+				ID        string `json:"id"`
+				Type      string `json:"type"`
+				Status    string `json:"status"`
+				StartedAt string `json:"startedAt"`
+				EndedAt   string `json:"endedAt,omitempty"`
+				ReportID  string `json:"reportID,omitempty"`
+				Error     string `json:"error,omitempty"`
 			}
 			summaries := make([]runSummary, len(runs))
 			for i, run := range runs {
@@ -405,7 +405,7 @@ func handleRuns(rm *RunManager) http.HandlerFunc {
 				return
 			}
 			if req.Type == "" {
-				http.Error(w, "type is required (pod-creation, api-latency, watch-stress)", http.StatusBadRequest)
+				http.Error(w, "type is required (resource-creation, api-latency, watch-stress)", http.StatusBadRequest)
 				return
 			}
 

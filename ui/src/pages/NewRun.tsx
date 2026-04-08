@@ -3,17 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { startRun } from '../api/client'
 import type { RunConfig } from '../api/client'
 
-type RunType = 'pod-creation' | 'api-latency' | 'watch-stress'
+type RunType = 'resource-creation' | 'api-latency' | 'watch-stress'
 
 const runTypeLabels: Record<RunType, string> = {
-  'pod-creation': 'Pod Creation / Resource Inflater',
+  'resource-creation': 'Resource Creation / Resource Inflater',
   'api-latency': 'API Latency Report',
   'watch-stress': 'Watch Stress Test',
 }
 
 export default function NewRun() {
   const navigate = useNavigate()
-  const [runType, setRunType] = useState<RunType>('pod-creation')
+  const [runType, setRunType] = useState<RunType>('resource-creation')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -42,7 +42,7 @@ export default function NewRun() {
     setError(null)
 
     const config: RunConfig = {}
-    if (runType === 'pod-creation') {
+    if (runType === 'resource-creation') {
       config.resourceTypes = resourceTypes
       config.count = count
       config.workers = workers
@@ -97,7 +97,7 @@ export default function NewRun() {
         </div>
 
         {/* Pod creation config */}
-        {runType === 'pod-creation' && (
+        {runType === 'resource-creation' && (
           <div className="bg-white rounded-lg p-4 shadow-sm border space-y-4">
             <h3 className="font-semibold text-gray-700">Resource Inflater Configuration</h3>
             <div className="grid grid-cols-2 gap-4">

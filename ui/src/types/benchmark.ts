@@ -1,6 +1,6 @@
 // Types mirroring Go benchmarkio JSON structs
 
-export type ReportType = 'pod-creation' | 'watch-stress' | 'api-latency'
+export type ReportType = 'resource-creation' | 'watch-stress' | 'api-latency'
 
 export interface ReportListItem {
   id: string
@@ -8,21 +8,22 @@ export interface ReportListItem {
   runID: string
   timestamp: string
   filename: string
+  resourceTypes?: string[]
 }
 
-// --- Pod Creation ---
+// --- Resource Creation ---
 
-export interface PodCreationReport {
-  type: 'pod-creation'
+export interface ResourceCreationReport {
+  type: 'resource-creation'
   runID: string
   timestamp: string
-  config: PodCreationConfig
+  config: ResourceCreationConfig
   results: InflationResult[]
   clusterInfo?: ClusterInfo
   apiLatency?: LatencyMeasurement[]
 }
 
-export interface PodCreationConfig {
+export interface ResourceCreationConfig {
   resourceTypes: string[]
   countPerType: number
   workers: number
@@ -149,4 +150,4 @@ export interface ClusterInfo {
   ingressCount: number
 }
 
-export type AnyReport = PodCreationReport | WatchStressReport | APILatencyReport
+export type AnyReport = ResourceCreationReport | WatchStressReport | APILatencyReport

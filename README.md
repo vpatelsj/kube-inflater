@@ -142,8 +142,8 @@ A single binary for all resource inflation. Select what to create with `--resour
 | `--cleanup-only` | `false` | Delete resources from a previous run then exit |
 | `--run-id` | auto | Run ID for labeling and scoped cleanup; auto-generated as `YYYYMMDD-HHMMSS-RAND` |
 | `--benchmark-report` | `false` | Run API latency tests after creation and generate a markdown report |
-| `--json-report` | `false` | Write a JSON report file for the benchmark UI |
-| `--report-output-dir` | `.` | Directory for report files |
+| `--json-report` | `true` | Write a JSON report file for the benchmark UI; disable with `--json-report=false` |
+| `--report-output-dir` | `./benchmark-reports` | Directory for report files |
 
 </details>
 
@@ -266,9 +266,9 @@ cd ui && npm install && npm run build && cd ..
 | Route | Page | Description |
 |---|---|---|
 | `/` | Dashboard | Lists active runs (polled every 3 s) and completed reports, grouped by type |
-| `/new-run` | New Run | Form to start pod-creation, api-latency, or watch-stress runs |
+| `/new-run` | New Run | Form to start resource-creation, api-latency, or watch-stress runs |
 | `/run/:id` | Run Monitor | Live log stream (SSE) + real-time cluster charts (nodes, pods, API health) |
-| `/report/pod-creation/:id` | Pod Creation Report | Batch throughput bars, cumulative creation line, failure rate per batch |
+| `/report/resource-creation/:id` | Resource Creation Report | Batch throughput bars, cumulative creation line, failure rate per batch |
 | `/report/watch-stress/:id` | Watch Stress Report | Latency breakdown bars, dual-axis scaling chart (events/sec vs connect latency) |
 | `/report/api-latency/:id` | API Latency Report | Top-N slowest endpoints, latency histogram, response-size-vs-latency scatter |
 
@@ -289,7 +289,7 @@ cd ui && npm install && npm run build && cd ..
 All three CLI tools can write JSON reports that the UI consumes:
 
 ```bash
-# Pod creation report
+# Resource creation report
 ./bin/kube-inflater --resource-types=pods --count=5000 \
   --json-report --report-output-dir=./benchmark-reports
 

@@ -26,7 +26,7 @@ func main() {
 		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 	}
 
-	outputDir := flag.String("output-dir", ".", "directory to save the performance report")
+	outputDir := flag.String("output-dir", "./benchmark-reports", "directory to save the performance report")
 	onlyCommon := flag.Bool("only-common", false, "test only common endpoints")
 	noLimits := flag.Bool("no-limits", false, "disable response size limits (WARNING: may return very large responses)")
 	jsonOutput := flag.Bool("json", false, "also output a JSON report for benchmark-ui")

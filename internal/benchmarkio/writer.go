@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"kube-inflater/internal/inflater"
@@ -12,12 +13,12 @@ import (
 	"kube-inflater/internal/watchstress"
 )
 
-// WritePodCreationReport converts engine results and optional perf data into a
-// PodCreationReport and writes it as JSON to the given directory.
-func WritePodCreationReport(dir string, runID string, cfg PodCreationConfig, results []inflater.InflationSummary, clusterInfo *perfv2.ClusterInfo, measurements []perfv2.LatencyMeasurement) (string, error) {
-	report := PodCreationReport{
+// WriteResourceCreationReport converts engine results and optional perf data into a
+// ResourceCreationReport and writes it as JSON to the given directory.
+func WriteResourceCreationReport(dir string, runID string, cfg ResourceCreationConfig, results []inflater.InflationSummary, clusterInfo *perfv2.ClusterInfo, measurements []perfv2.LatencyMeasurement) (string, error) {
+	report := ResourceCreationReport{
 		ReportMeta: ReportMeta{
-			Type:      ReportPodCreation,
+			Type:      ReportResourceCreation,
 			RunID:     runID,
 			Timestamp: time.Now().UTC(),
 		},
@@ -32,7 +33,8 @@ func WritePodCreationReport(dir string, runID string, cfg PodCreationConfig, res
 		report.APILatency = convertLatencyMeasurements(measurements)
 	}
 
-	return writeJSON(dir, fmt.Sprintf("pod-creation-%s", runID), &report)
+	typesLabel := strings.Join(cfg.ResourceTypes, "-")
+	return writeJSON(dir, fmt.Sprintf("%s-%s", typesLabel, runID), &report)
 }
 
 // WriteWatchStressReport converts watch metrics into a WatchStressReport JSON file.

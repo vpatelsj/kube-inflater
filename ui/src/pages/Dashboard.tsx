@@ -6,9 +6,16 @@ import type { RunSummary } from '../api/client'
 import type { ReportType } from '../types/benchmark'
 
 const typeBadge: Record<ReportType, { label: string; color: string }> = {
-  'pod-creation': { label: 'Pod Creation', color: 'bg-blue-100 text-blue-800' },
+  'resource-creation': { label: 'Resource Creation', color: 'bg-blue-100 text-blue-800' },
   'watch-stress': { label: 'Watch Stress', color: 'bg-purple-100 text-purple-800' },
   'api-latency': { label: 'API Latency', color: 'bg-green-100 text-green-800' },
+}
+
+function reportLabel(type: ReportType, resourceTypes?: string[]): string {
+  if (type === 'resource-creation' && resourceTypes && resourceTypes.length > 0) {
+    return resourceTypes.join(', ')
+  }
+  return typeBadge[type]?.label ?? type
 }
 
 const statusBadge: Record<string, { label: string; color: string }> = {
@@ -115,7 +122,7 @@ export default function Dashboard() {
                 >
                   <div className="flex items-center gap-3">
                     <span className={`text-xs font-medium px-2 py-1 rounded ${badge?.color}`}>
-                      {badge?.label ?? r.type}
+                      {reportLabel(r.type, r.resourceTypes)}
                     </span>
                     <span className="font-mono text-sm text-gray-600">{r.runID}</span>
                     <span className="ml-auto text-sm text-gray-400">
