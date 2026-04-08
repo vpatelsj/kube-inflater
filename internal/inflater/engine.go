@@ -81,10 +81,16 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 	opts := resourcegen.GeneratorOpts{
 		DataSizeBytes: e.cfg.DataSizeBytes,
+		HollowNode:    e.cfg.HollowNodeOpts,
 	}
 	gen, err := resourcegen.NewGeneratorWithOpts(typeName, opts)
 	if err != nil {
 		return err
+	}
+
+	// Setup-based generators (e.g. hollownodes) use a different path
+	if setupGen, ok := gen.(resourcegen.SetupTeardownGenerator); ok && setupGen.IsSetupBased() {
+		return e.inflateSetupType(ctx, setupGen, typeName)
 	}
 
 	// For CRDs, create the CRD definition first
@@ -145,6 +151,36 @@ func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 	e.Results = append(e.Results, summary)
 	logInfo(fmt.Sprintf("Completed inflating %s: %d created in %v (%.0f/sec)",
 		typeName, summary.TotalCreated, summary.TotalDuration.Round(time.Millisecond), summary.Throughput()))
+	return nil
+}
+
+// inflateSetupType handles generators that use one-time setup (e.g., DaemonSet-based hollow nodes).
+func (e *Engine) inflateSetupType(ctx context.Context, gen resourcegen.SetupTeardownGenerator, typeName string) error {
+	logInfo(fmt.Sprintf("Inflating %s via setup-based generator (count=%d)", typeName, e.cfg.CountPerType))
+	runStart := time.Now()
+
+	created, err := gen.Setup(ctx, e.client, e.dynClient, e.cfg.RunID, e.cfg.CountPerType, e.cfg.DryRun)
+	if err != nil {
+		return fmt.Errorf("setup for %s: %w", typeName, err)
+	}
+
+	if !e.cfg.DryRun {
+		waitTimeout := e.cfg.HollowNodeWaitTimeout
+		if waitTimeout <= 0 {
+			waitTimeout = 50 * time.Minute
+		}
+		if err := gen.WaitForReady(ctx, e.client, waitTimeout); err != nil {
+			return fmt.Errorf("waiting for %s: %w", typeName, err)
+		}
+	}
+
+	summary := InflationSummary{
+		ResourceType:  typeName,
+		TotalCreated:  int64(created),
+		TotalDuration: time.Since(runStart),
+	}
+	e.Results = append(e.Results, summary)
+	logInfo(fmt.Sprintf("Completed inflating %s: %d in %v", typeName, created, summary.TotalDuration.Round(time.Millisecond)))
 	return nil
 }
 

@@ -18,6 +18,19 @@ func TestAllGeneratorsProduceValidObjects(t *testing.T) {
 				t.Fatalf("NewGenerator(%q): %v", typeName, err)
 			}
 
+			// Skip setup-based generators — they don't produce objects via Generate()
+			if sg, ok := gen.(SetupTeardownGenerator); ok && sg.IsSetupBased() {
+				// Still verify metadata methods work
+				if gen.TypeName() != typeName {
+					t.Errorf("TypeName: got %q, want %q", gen.TypeName(), typeName)
+				}
+				gvr := gen.GVR()
+				if gvr.Resource == "" {
+					t.Error("GVR resource is empty")
+				}
+				return
+			}
+
 			ns := namespace
 			if !gen.IsNamespaced() {
 				ns = ""

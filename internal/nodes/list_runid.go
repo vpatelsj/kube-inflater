@@ -11,7 +11,7 @@ import (
 
 // ListKubemarkNodesForRun returns names and ready count for hollow nodes belonging to a specific run-id (daemonset name).
 // Uses unpaginated list to avoid stale resource-version issues during rapid node creation.
-func ListKubemarkNodesForRun(ctx context.Context, client *kubernetes.Clientset, runID string) ([]string, int, error) {
+func ListKubemarkNodesForRun(ctx context.Context, client kubernetes.Interface, runID string) ([]string, int, error) {
 	selector := labelsPkg.Set{"kubemark": "true", "run-id": runID}.AsSelector().String()
 	lst, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {

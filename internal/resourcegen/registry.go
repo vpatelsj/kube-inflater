@@ -1,10 +1,17 @@
 package resourcegen
 
-import "fmt"
+import (
+	"fmt"
+
+	cfgpkg "kube-inflater/internal/config"
+)
 
 // GeneratorOpts are options passed to generator constructors.
 type GeneratorOpts struct {
 	DataSizeBytes int
+
+	// HollowNode options (only used by hollownodes generator)
+	HollowNode *cfgpkg.HollowNodeOpts
 }
 
 // registry maps short type names to generator constructors.
@@ -18,6 +25,7 @@ var registry = map[string]func(opts GeneratorOpts) ResourceGenerator{
 	"jobs":            func(o GeneratorOpts) ResourceGenerator { return &JobGenerator{} },
 	"statefulsets":    func(o GeneratorOpts) ResourceGenerator { return &StatefulSetGenerator{} },
 	"customresources": func(o GeneratorOpts) ResourceGenerator { return &CRDGenerator{DataSizeBytes: o.DataSizeBytes} },
+	"hollownodes":     func(o GeneratorOpts) ResourceGenerator { return NewHollowNodeGenerator(o.HollowNode) },
 }
 
 // AllTypeNames returns sorted list of supported resource type names.
@@ -25,6 +33,7 @@ func AllTypeNames() []string {
 	return []string{
 		"configmaps",
 		"customresources",
+		"hollownodes",
 		"jobs",
 		"namespaces",
 		"pods",

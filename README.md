@@ -6,8 +6,7 @@ A Kubernetes scalability and stress-testing toolkit. Inflate clusters with hollo
 
 | Binary | Purpose |
 |---|---|
-| `kube-inflater` | Deploy DaemonSets of kubemark containers to register hollow nodes |
-| `kube-resource-inflater` | Bulk-create ConfigMaps, Secrets, Pods, Jobs, StatefulSets, CRDs, etc. with optional KWOK scheduling |
+| `kube-inflater` | Unified inflater: bulk-create any resource type including hollow kubemark nodes, ConfigMaps, Secrets, Pods, Jobs, StatefulSets, CRDs, etc. |
 | `watch-agent` | Open thousands of concurrent watch connections and measure event throughput / delivery latency |
 | `perf-report` | Auto-discover API endpoints and generate a markdown performance report |
 | `cleanup-nodes` | Surgically remove zombie nodes, NotReady nodes, and problematic pods |
@@ -22,46 +21,81 @@ A Kubernetes scalability and stress-testing toolkit. Inflate clusters with hollo
 # Install Mage (recommended build tool)
 go install github.com/magefile/mage@latest
 
-# Build everything
-mage build              # kube-inflater
-mage resourceInflater   # kube-resource-inflater
+# Build
+mage build              # kube-inflater (unified binary)
 mage cleanupNodes       # cleanup-nodes
 mage etcdTester         # etcd-tester
 
-# Or build individually with plain Go
-go build -o bin/kube-inflater ./cmd/kube-inflater
+# Or build with plain Go
+go build -o bin/kube-inflater ./cmd/kube-resource-inflater
 ```
 
-## kube-inflater — Hollow Node Inflation
+## kube-inflater — Unified Resource Inflater
 
-Deploys a DaemonSet to the `kubemark-incremental-test` namespace. Each pod runs N kubemark containers, so total hollow nodes = `scheduled pods × --containers-per-pod`. The tool waits for all nodes to register Ready, then optionally measures API latency.
+A single binary for all resource inflation needs. Use `--resource-types` to select what to create.
+
+**Supported resource types:** `configmaps`, `customresources`, `hollownodes`, `jobs`, `namespaces`, `pods`, `secrets`, `serviceaccounts`, `services`, `statefulsets`
+
+> **Pod benchmarking is KWOK-only**: When `pods`, `jobs`, or `statefulsets` are selected, KWOK fake nodes are automatically provisioned. Pods always schedule on KWOK nodes — no real kubelet load.
+
+### Hollow Node Inflation
+
+Deploys a DaemonSet to the `kubemark-incremental-test` namespace. Each pod runs N kubemark containers, so total hollow nodes = `scheduled pods × --containers-per-pod`. The tool waits for all nodes to register Ready.
 
 ```bash
 # Default: 5 containers per pod on every eligible node
-./bin/kube-inflater
+./bin/kube-inflater --resource-types=hollownodes --count=100
 
 # Higher density
-./bin/kube-inflater --containers-per-pod 10
+./bin/kube-inflater --resource-types=hollownodes --count=500 --containers-per-pod=10
 
-# Custom name, skip perf tests
-./bin/kube-inflater --daemonset-name my-run --skip-perf-tests
+# Custom kubemark image
+./bin/kube-inflater --resource-types=hollownodes --kubemark-image=my-registry/kubemark:latest
 
-# Cleanup
-./bin/kube-inflater --cleanup-only
+# Cleanup hollow nodes
+./bin/kube-inflater --resource-types=hollownodes --cleanup-only
+```
+
+### Bulk Resource Creation
+
+Creates thousands of Kubernetes resources across spread namespaces using exponential batching and a configurable worker pool.
+
+```bash
+# 1000 ConfigMaps and Secrets (default settings)
+./bin/kube-inflater --resource-types=configmaps,secrets --count=1000
+
+# 100k ConfigMaps, high throughput
+./bin/kube-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200
+
+# 500k pods on KWOK fake nodes (KWOK auto-enabled)
+./bin/kube-inflater --resource-types=pods --count=500000 \
+  --workers=200 --qps=500 --burst=1000 \
+  --batch-initial=100 --batch-factor=2 --max-batches=30 \
+  --spread-namespaces=100 --batch-pause=1
+
+# Mix hollow nodes with resource creation
+./bin/kube-inflater --resource-types=hollownodes,configmaps --count=1000
+
+# Generate a benchmark report (includes creation throughput + API latency)
+./bin/kube-inflater --resource-types=pods --count=5000 \
+  --benchmark-report --report-output-dir=/tmp/reports
+
+# Preview without creating anything
+./bin/kube-inflater --resource-types=configmaps --count=100 --dry-run
+
+# Cleanup a specific run
+./bin/kube-inflater --cleanup-only --run-id=<id>
 ```
 
 <details>
-<summary>All flags</summary>
+<summary>Hollow node flags</summary>
 
 | Flag | Default | Description |
 |---|---|---|
 | `--containers-per-pod` | 5 | Kubemark containers per DaemonSet pod |
-| `--daemonset-name` | auto | Name for the DaemonSet (timestamp + random suffix) |
-| `--timeout` | 3000 | Seconds to wait for nodes to become Ready |
-| `--perf-wait` | 30 | Seconds to settle before performance measurement |
-| `--perf-tests` | 5 | Number of API calls for latency measurement |
-| `--skip-perf-tests` | false | Skip performance measurement entirely |
-| `--cleanup-only` | false | Delete test resources and exit |
+| `--kubemark-image` | k3sacr1.azurecr.io/kubemark:… | Kubemark container image |
+| `--hollow-namespace` | kubemark-incremental-test | Namespace for DaemonSet and supporting resources |
+| `--hollow-wait-timeout` | 3000 | Seconds to wait for hollow nodes to become Ready |
 | `--prune-previous` | false | Delete older DaemonSets before creating a new one |
 | `--retain-daemonsets` | 1 | Number of recent DaemonSets to keep when pruning |
 | `--node-status-frequency` | 60s | Kubelet node-status update interval |
@@ -69,45 +103,7 @@ Deploys a DaemonSet to the `kubemark-incremental-test` namespace. Each pod runs 
 | `--node-monitor-grace` | 240s | Controller-manager grace period |
 | `--token-audiences` | K8s defaults | Comma-separated SA token audiences |
 
-Env vars supported: `CONTAINERS_PER_POD`, `WAIT_TIMEOUT`, `PERFORMANCE_WAIT`, etc.
-
 </details>
-
-### Large-Scale Inflation
-
-The included `inflate-250k.sh` script incrementally deploys up to 50 DaemonSets (10 containers each) to scale a cluster toward 250k+ hollow nodes. It is reentrant — it detects existing `hollow-step-N` DaemonSets and resumes.
-
-## kube-resource-inflater — Bulk Resource Creation
-
-Creates thousands of Kubernetes resources across spread namespaces using exponential batching and a configurable worker pool.
-
-**Supported resource types:** `configmaps`, `secrets`, `services`, `namespaces`, `pods`, `serviceaccounts`, `jobs`, `statefulsets`, `customresources`
-
-> **Pod benchmarking is KWOK-only**: When `pods`, `jobs`, or `statefulsets` are selected, KWOK fake nodes are automatically provisioned. Pods always schedule on KWOK nodes — no real kubelet load, no `--kwok` flag needed.
-
-```bash
-# 1000 ConfigMaps and Secrets (default settings)
-./bin/kube-resource-inflater --resource-types=configmaps,secrets --count=1000
-
-# 100k ConfigMaps, high throughput
-./bin/kube-resource-inflater --resource-types=configmaps --count=100000 --workers=100 --qps=200
-
-# 500k pods on KWOK fake nodes (KWOK auto-enabled)
-./bin/kube-resource-inflater --resource-types=pods --count=500000 \
-  --workers=200 --qps=500 --burst=1000 \
-  --batch-initial=100 --batch-factor=2 --max-batches=30 \
-  --spread-namespaces=100 --batch-pause=1
-
-# Generate a benchmark report (includes creation throughput + API latency)
-./bin/kube-resource-inflater --resource-types=pods --count=5000 \
-  --benchmark-report --report-output-dir=/tmp/reports
-
-# Preview without creating anything
-./bin/kube-resource-inflater --resource-types=configmaps --count=100 --dry-run
-
-# Cleanup a specific run
-./bin/kube-resource-inflater --cleanup-only --run-id=<id>
-```
 
 ## watch-agent — Watch Stress Testing
 
@@ -166,7 +162,7 @@ A local web application for viewing benchmark results with interactive charts an
 
 ```bash
 # Generate JSON reports during benchmark runs
-./bin/kube-resource-inflater --resource-types=pods --count=5000 \
+./bin/kube-inflater --resource-types=pods --count=5000 \
   --json-report --report-output-dir=./benchmark-reports
 
 ./bin/perf-report --json --output-dir=./benchmark-reports
@@ -191,8 +187,7 @@ Each report page includes a PDF export button.
 
 ```
 cmd/
-  kube-inflater/          Hollow node inflation CLI
-  kube-resource-inflater/ Bulk resource creation CLI
+  kube-resource-inflater/ Unified inflater CLI (builds as kube-inflater)
   watch-agent/            Watch stress agent (watch + mutate subcommands)
   perf-report/            API latency report generator
   cleanup-nodes/          Node/pod cleanup utility
@@ -201,29 +196,27 @@ cmd/
 internal/
   config/                 Shared configuration types and defaults
   inflater/               Resource creation engine with exponential batching
-  resourcegen/            Per-type resource generators (ConfigMap, Secret, Pod, CRD, …)
+  resourcegen/            Per-type resource generators (ConfigMap, Secret, Pod, CRD, HollowNodes, …)
   plan/                   Batch-size planning (exponential growth)
   kwok/                   KWOK controller provisioning and fake-node management
   daemonsetspec/          DaemonSet spec builder for kubemark pods
-  deploymentspec/         Deployment spec builder
-  podspec/                Pod spec helpers
   nodes/                  Node listing and filtering
-  naming/                 Hollow-node naming utilities
-  perf/                   Legacy performance stats
   perfv2/                 Endpoint discovery and performance reporter
   watchstress/            Watch connection manager and resource mutator
+  benchmarkio/            JSON benchmark report I/O
+  clustermon/             Cluster state snapshot monitor
 deploy/
   watch-agent/            Kubernetes manifests (Job, RBAC, FlowSchema)
 etcd-tester/              Standalone etcd test module
 scripts/                  Operational shell scripts
+ui/                       React + Vite frontend for benchmark-ui
 ```
 
 ## Build Targets (Mage)
 
 ```bash
 mage -l                    # List all targets
-mage build                 # Build kube-inflater
-mage resourceInflater      # Build kube-resource-inflater
+mage build                 # Build kube-inflater (unified binary)
 mage cleanupNodes          # Build cleanup-nodes
 mage etcdTester            # Build etcd-tester
 mage benchmarkUI           # Build benchmark-ui server

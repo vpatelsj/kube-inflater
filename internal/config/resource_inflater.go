@@ -18,6 +18,20 @@ const (
 	DefaultKWOKNodes         = 10
 )
 
+// HollowNodeOpts configures the hollow node generator.
+type HollowNodeOpts struct {
+	ContainersPerPod  int
+	KubemarkImage     string
+	TokenAudiences    []string
+	NodeStatusFreq    string
+	NodeLeaseDuration int
+	NodeMonitorGrace  string
+	Namespace         string // hollow-node namespace (default: kubemark-incremental-test)
+	WaitTimeout       time.Duration
+	PrunePrevious     bool
+	RetainDaemonSets  int
+}
+
 // ResourceInflaterConfig holds configuration for the kube-resource-inflater command.
 type ResourceInflaterConfig struct {
 	ResourceTypes    []string
@@ -39,9 +53,12 @@ type ResourceInflaterConfig struct {
 	SkipPerfTests    bool
 
 	// KWOK — automatically enabled when pod-bearing resource types (pods, jobs, statefulsets) are selected.
-	// Pods always schedule on KWOK fake nodes to avoid real kubelet load.
 	KWOKNodes   int  // number of KWOK fake nodes to create (auto-scaled if too low)
 	KWOKCleanup bool // also remove the KWOK controller on cleanup
+
+	// Hollow node options — used when resource-types includes "hollownodes"
+	HollowNodeOpts        *HollowNodeOpts
+	HollowNodeWaitTimeout time.Duration
 }
 
 // HasPodBearingTypes returns true if any of the configured resource types create pods.
