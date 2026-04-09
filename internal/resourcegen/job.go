@@ -23,7 +23,7 @@ func (g *JobGenerator) Generate(runID, namespace string, index int) (*unstructur
 				"completions":             int64(1),
 				"parallelism":             int64(1),
 				"backoffLimit":            int64(0),
-				"ttlSecondsAfterFinished": int64(300),
+				"ttlSecondsAfterFinished": int64(3600),
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": toUnstructuredLabels(labels),

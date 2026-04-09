@@ -403,7 +403,6 @@ func (e *Engine) Verify(ctx context.Context) error {
 	}
 
 	logInfo("🔍 Verifying created resources...")
-	labelSelector := fmt.Sprintf("%s=%s", resourcegen.RunIDLabel, e.cfg.RunID)
 	allPassed := true
 
 	for _, result := range e.Results {
@@ -421,7 +420,7 @@ func (e *Engine) Verify(ctx context.Context) error {
 		// Setup-based generators (hollownodes) — count nodes by DaemonSet run-id label
 		if _, ok := gen.(resourcegen.SetupTeardownGenerator); ok {
 			// Use the stored generator from inflation (has the correct DaemonSet name)
-			verifySelector := labelSelector
+			verifySelector := fmt.Sprintf("%s=%s", resourcegen.RunIDLabel, e.cfg.RunID)
 			if storedGen, found := e.setupGens[result.ResourceType]; found {
 				if hn, ok := storedGen.(*resourcegen.HollowNodeGenerator); ok && hn.DaemonSetName() != "" {
 					verifySelector = fmt.Sprintf("kubemark=true,%s=%s", resourcegen.RunIDLabel, hn.DaemonSetName())
@@ -443,6 +442,9 @@ func (e *Engine) Verify(ctx context.Context) error {
 		}
 
 		var actual int64
+		// Use both run-id and resource-type labels to avoid counting pods
+		// created by jobs/statefulsets when verifying direct pod count, etc.
+		labelSelector := fmt.Sprintf("%s=%s,%s=%s", resourcegen.RunIDLabel, e.cfg.RunID, resourcegen.ResourceTypeLabel, result.ResourceType)
 		if gen.IsNamespaced() {
 			for i := 0; i < e.cfg.SpreadNamespaces; i++ {
 				ns := fmt.Sprintf("%s-%d", e.cfg.Namespace, i)
