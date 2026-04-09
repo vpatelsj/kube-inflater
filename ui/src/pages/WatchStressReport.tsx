@@ -56,25 +56,78 @@ export default function WatchStressReport() {
               <div className="text-xs text-gray-500">Peak Watches</div>
             </div>
             <div>
-              <div className="text-2xl font-bold text-red-600">{m.errors.toLocaleString()}</div>
-              <div className="text-xs text-gray-500">Errors</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold">{m.reconnects.toLocaleString()}</div>
-              <div className="text-xs text-gray-500">Reconnects</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold">{m.avgConnectLatencyMs.toFixed(0)}ms</div>
-              <div className="text-xs text-gray-500">Avg Connect</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold">{m.p99DeliveryLatencyMs.toFixed(1)}ms</div>
-              <div className="text-xs text-gray-500">P99 Delivery</div>
-            </div>
-            <div>
               <div className="text-2xl font-bold">{m.durationSec.toFixed(0)}s</div>
               <div className="text-xs text-gray-500">Duration</div>
             </div>
+          </div>
+        </div>
+
+        {/* Detailed metrics tables */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+          {/* Latency breakdown */}
+          <div className="bg-white rounded-lg p-4 shadow-sm border overflow-x-auto">
+            <h4 className="text-sm font-semibold text-gray-500 mb-2">Latency Breakdown</h4>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                  <th className="px-3 py-1.5">Metric</th>
+                  <th className="px-3 py-1.5 text-right">Connect</th>
+                  <th className="px-3 py-1.5 text-right">Delivery</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Average</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{m.avgConnectLatencyMs.toFixed(1)}ms</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{m.avgDeliveryLatencyMs.toFixed(1)}ms</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">P99</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-gray-400">—</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{m.p99DeliveryLatencyMs.toFixed(1)}ms</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Max</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${m.maxConnectLatencyMs > 1000 ? 'text-red-600' : ''}`}>{m.maxConnectLatencyMs.toFixed(1)}ms</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${m.maxDeliveryLatencyMs > 1000 ? 'text-red-600' : ''}`}>{m.maxDeliveryLatencyMs.toFixed(1)}ms</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Connection health */}
+          <div className="bg-white rounded-lg p-4 shadow-sm border overflow-x-auto">
+            <h4 className="text-sm font-semibold text-gray-500 mb-2">Connection Health</h4>
+            <table className="w-full text-sm">
+              <tbody>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Peak Alive Watches</td>
+                  <td className="px-3 py-1.5 text-right font-mono font-semibold">{m.peakAliveWatches.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Reconnects</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${m.reconnects > 0 ? 'text-yellow-600' : ''}`}>{m.reconnects.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Errors</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${m.errors > 0 ? 'text-red-600 font-semibold' : ''}`}>{m.errors.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Min Events/Conn</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{m.minEventsPerConn.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Max Events/Conn</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{m.maxEventsPerConn.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Event Spread</td>
+                  <td className="px-3 py-1.5 text-right font-mono">
+                    {m.minEventsPerConn > 0 ? `${(m.maxEventsPerConn / m.minEventsPerConn).toFixed(1)}x` : '—'}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -85,27 +138,78 @@ export default function WatchStressReport() {
           )}
         </div>
 
+        {/* Scaling data table */}
+        {r.scalingData && r.scalingData.length > 0 && (
+          <div className="bg-white rounded-lg p-4 shadow-sm border mt-4 overflow-x-auto">
+            <h4 className="text-sm font-semibold text-gray-500 mb-2">Scaling Data</h4>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                  <th className="px-3 py-1.5 text-right">Connections</th>
+                  <th className="px-3 py-1.5 text-right">Events/sec</th>
+                  <th className="px-3 py-1.5 text-right">Avg Connect</th>
+                  <th className="px-3 py-1.5 text-right">Max Connect</th>
+                  <th className="px-3 py-1.5 text-right">Error Rate</th>
+                  <th className="px-3 py-1.5 text-right">Peak Alive</th>
+                </tr>
+              </thead>
+              <tbody>
+                {r.scalingData.map((d, i) => (
+                  <tr key={i} className="border-b border-gray-100">
+                    <td className="px-3 py-1 text-right font-mono">{d.connections.toLocaleString()}</td>
+                    <td className="px-3 py-1 text-right font-mono text-blue-600">{d.eventsPerSec.toFixed(0)}</td>
+                    <td className="px-3 py-1 text-right font-mono">{d.avgConnectMs.toFixed(1)}ms</td>
+                    <td className={`px-3 py-1 text-right font-mono ${d.maxConnectMs > 1000 ? 'text-red-600' : ''}`}>{d.maxConnectMs.toFixed(1)}ms</td>
+                    <td className={`px-3 py-1 text-right font-mono ${d.errorRate > 0 ? 'text-red-600' : ''}`}>{(d.errorRate * 100).toFixed(2)}%</td>
+                    <td className="px-3 py-1 text-right font-mono">{d.peakAlive.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {r.mutatorMetrics && (
-          <div className="bg-white rounded-lg p-4 shadow-sm border mt-4">
+          <div className="bg-white rounded-lg p-4 shadow-sm border mt-4 overflow-x-auto">
             <h3 className="text-lg font-semibold mb-3">Mutator Performance</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-xl font-bold">{r.mutatorMetrics.creates.toLocaleString()}</div>
-                <div className="text-xs text-gray-500">Creates</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold">{r.mutatorMetrics.updates.toLocaleString()}</div>
-                <div className="text-xs text-gray-500">Updates</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold">{r.mutatorMetrics.deletes.toLocaleString()}</div>
-                <div className="text-xs text-gray-500">Deletes</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold text-green-600">{r.mutatorMetrics.actualRate.toFixed(1)}/s</div>
-                <div className="text-xs text-gray-500">Actual Rate</div>
-              </div>
-            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                  <th className="px-3 py-1.5">Metric</th>
+                  <th className="px-3 py-1.5 text-right">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Creates</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{r.mutatorMetrics.creates.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Updates</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{r.mutatorMetrics.updates.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Deletes</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{r.mutatorMetrics.deletes.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Total Mutations</td>
+                  <td className="px-3 py-1.5 text-right font-mono font-semibold">{(r.mutatorMetrics.creates + r.mutatorMetrics.updates + r.mutatorMetrics.deletes).toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Errors</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${r.mutatorMetrics.errors > 0 ? 'text-red-600 font-semibold' : ''}`}>{r.mutatorMetrics.errors.toLocaleString()}</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Actual Rate</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-green-600">{r.mutatorMetrics.actualRate.toFixed(1)}/s</td>
+                </tr>
+                <tr className="border-b border-gray-100">
+                  <td className="px-3 py-1.5 text-gray-600">Duration</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{r.mutatorMetrics.durationSec.toFixed(1)}s</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         )}
       </div>

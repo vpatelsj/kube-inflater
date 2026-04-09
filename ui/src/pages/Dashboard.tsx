@@ -11,12 +11,6 @@ const typeBadge: Record<ReportType, { label: string; color: string }> = {
   'api-latency': { label: 'API Latency', color: 'bg-green-100 text-green-800' },
 }
 
-function reportLabel(type: ReportType, resourceTypes?: string[]): string {
-  if (type === 'resource-creation' && resourceTypes && resourceTypes.length > 0) {
-    return resourceTypes.join(', ')
-  }
-  return typeBadge[type]?.label ?? type
-}
 
 const statusBadge: Record<string, { label: string; color: string }> = {
   pending: { label: 'Pending', color: 'bg-yellow-100 text-yellow-800' },
@@ -111,27 +105,44 @@ export default function Dashboard() {
       {reports.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-gray-500 mb-2 uppercase tracking-wide">Reports</h2>
-          <div className="grid gap-2">
-            {reports.map((r) => {
-              const badge = typeBadge[r.type]
-              return (
-                <Link
-                  key={r.id}
-                  to={reportRoute(r.type, r.id)}
-                  className="block bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs font-medium px-2 py-1 rounded ${badge?.color}`}>
-                      {reportLabel(r.type, r.resourceTypes)}
-                    </span>
-                    <span className="font-mono text-sm text-gray-600">{r.runID}</span>
-                    <span className="ml-auto text-sm text-gray-400">
-                      {new Date(r.timestamp).toLocaleString()}
-                    </span>
-                  </div>
-                </Link>
-              )
-            })}
+          <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                  <th className="px-4 py-2">Type</th>
+                  <th className="px-4 py-2">Run ID</th>
+                  <th className="px-4 py-2">Resources</th>
+                  <th className="px-4 py-2">Timestamp</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => {
+                  const badge = typeBadge[r.type]
+                  return (
+                    <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-4 py-2">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${badge?.color}`}>
+                          {badge?.label ?? r.type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-600">{r.runID}</td>
+                      <td className="px-4 py-2 text-xs text-gray-600">
+                        {r.resourceTypes ? r.resourceTypes.join(', ') : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-gray-400">
+                        {new Date(r.timestamp).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        <Link to={reportRoute(r.type, r.id)} className="text-blue-600 hover:underline text-xs font-medium">
+                          View →
+                        </Link>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
