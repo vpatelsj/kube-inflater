@@ -250,8 +250,10 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	}
 
 	var resourceTypesCSV string
+	var presetName string
 	qps := float64(cfg.QPS)
 
+	flag.StringVar(&presetName, "preset", "", "T-shirt size preset: small (10k), medium (50k), large (100k) of every resource type")
 	flag.StringVar(&resourceTypesCSV, "resource-types", "configmaps", "Comma-separated resource types to create: "+strings.Join(resourcegen.AllTypeNames(), ", "))
 	flag.IntVar(&cfg.CountPerType, "count", cfg.CountPerType, "Number of resources to create per type")
 	flag.IntVar(&cfg.Workers, "workers", cfg.Workers, "Number of concurrent worker goroutines")
@@ -301,12 +303,52 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 
 	flag.Parse()
 
+	// Apply preset first — individual flags override preset values
+	if presetName != "" {
+		if !cfg.ApplyPreset(presetName) {
+			fmt.Fprintf(os.Stderr, "Error: unknown preset %q (valid: %s)\n", presetName, strings.Join(cfgpkg.PresetNames, ", "))
+			os.Exit(1)
+		}
+		logInfo(fmt.Sprintf("Applied preset %q: %d per type, %d types, %d workers, QPS %.0f",
+			presetName, cfg.CountPerType, len(cfg.ResourceTypes), cfg.Workers, cfg.QPS))
+		// Update qps from preset (may be overridden below by explicit flag)
+		qps = float64(cfg.QPS)
+	}
+
+	// Apply explicitly-set flags on top of preset
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "resource-types":
+			cfg.ResourceTypes = parseCSV(resourceTypesCSV)
+		case "count":
+			// already written to cfg by flag package
+		case "workers":
+			// already written
+		case "qps":
+			// will be applied below
+		case "burst":
+			// already written
+		case "batch-initial":
+			// already written
+		case "batch-factor":
+			// already written
+		case "max-batches":
+			// already written
+		case "spread-namespaces":
+			// already written
+		case "batch-pause":
+			// handled below
+		}
+	})
+
 	cfg.BatchPause = time.Duration(batchPauseSec) * time.Second
 	cfg.QPS = float32(qps)
 
-	// Parse resource types
-	if resourceTypesCSV != "" {
-		cfg.ResourceTypes = parseCSV(resourceTypesCSV)
+	// Parse resource types (only if preset was NOT used and flag was not explicitly set)
+	if presetName == "" {
+		if resourceTypesCSV != "" {
+			cfg.ResourceTypes = parseCSV(resourceTypesCSV)
+		}
 	}
 
 	// Validate resource types

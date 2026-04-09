@@ -2,6 +2,27 @@ import type { ReportListItem, ReportType, AnyReport } from '../types/benchmark'
 
 const API_BASE = '/api'
 
+// --- Presets ---
+
+export interface PresetInfo {
+  name: string
+  label: string
+  resourceTypes: string[]
+  countPerType: number
+  workers: number
+  qps: number
+  burst: number
+  spreadNamespaces: number
+}
+
+export async function fetchPresets(): Promise<PresetInfo[]> {
+  const res = await fetch(`${API_BASE}/presets`)
+  if (!res.ok) throw new Error(`Failed to fetch presets: ${res.statusText}`)
+  return res.json()
+}
+
+// --- Reports ---
+
 export async function fetchReports(type?: ReportType): Promise<ReportListItem[]> {
   const params = type ? `?type=${type}` : ''
   const res = await fetch(`${API_BASE}/reports${params}`)
@@ -34,6 +55,7 @@ export interface RunDetail extends RunSummary {
 }
 
 export interface RunConfig {
+  preset?: string
   resourceTypes?: string
   count?: number
   workers?: number

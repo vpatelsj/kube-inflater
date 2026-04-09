@@ -18,6 +18,7 @@ import (
 
 	"kube-inflater/internal/benchmarkio"
 	"kube-inflater/internal/clustermon"
+	cfgpkg "kube-inflater/internal/config"
 )
 
 // Run tracks a benchmark run launched from the UI.
@@ -41,6 +42,7 @@ type Run struct {
 // RunConfig is the user-submitted configuration for a new run.
 type RunConfig struct {
 	// Pod creation / resource inflater
+	Preset           string `json:"preset,omitempty"` // small, medium, large
 	ResourceTypes    string `json:"resourceTypes,omitempty"`
 	Count            int    `json:"count,omitempty"`
 	Workers          int    `json:"workers,omitempty"`
@@ -202,6 +204,9 @@ func (rm *RunManager) buildResourceInflaterArgs(cfg RunConfig) []string {
 		"--json-report",
 		"--report-output-dir", rm.reportsDir,
 	}
+	if cfg.Preset != "" {
+		args = append(args, "--preset", cfg.Preset)
+	}
 	if cfg.ResourceTypes != "" {
 		args = append(args, "--resource-types", cfg.ResourceTypes)
 	}
@@ -333,6 +338,9 @@ func main() {
 	// Report API
 	mux.HandleFunc("/api/reports", corsMiddleware(handleListReports(reportsDirs)))
 	mux.HandleFunc("/api/reports/", corsMiddleware(handleGetReport(reportsDirs)))
+
+	// Presets API
+	mux.HandleFunc("/api/presets", corsMiddleware(handlePresets()))
 
 	// Run management API
 	mux.HandleFunc("/api/runs", corsMiddleware(handleRuns(runMgr)))
@@ -579,6 +587,41 @@ func handleClusterLiveSSE(rm *RunManager, monitor *clustermon.Monitor) http.Hand
 			case <-time.After(pollInterval):
 			}
 		}
+	}
+}
+
+func handlePresets() http.HandlerFunc {
+	type presetInfo struct {
+		Name             string   `json:"name"`
+		Label            string   `json:"label"`
+		ResourceTypes    []string `json:"resourceTypes"`
+		CountPerType     int      `json:"countPerType"`
+		Workers          int      `json:"workers"`
+		QPS              float32  `json:"qps"`
+		Burst            int      `json:"burst"`
+		SpreadNamespaces int      `json:"spreadNamespaces"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		result := make([]presetInfo, 0, len(cfgpkg.PresetNames))
+		for _, name := range cfgpkg.PresetNames {
+			p := cfgpkg.Presets[name]
+			result = append(result, presetInfo{
+				Name:             p.Name,
+				Label:            p.Label,
+				ResourceTypes:    p.ResourceTypes,
+				CountPerType:     p.CountPerType,
+				Workers:          p.Workers,
+				QPS:              p.QPS,
+				Burst:            p.Burst,
+				SpreadNamespaces: p.SpreadNamespaces,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
 	}
 }
 

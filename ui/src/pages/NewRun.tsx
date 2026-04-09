@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { startRun } from '../api/client'
-import type { RunConfig } from '../api/client'
+import { startRun, fetchPresets } from '../api/client'
+import type { RunConfig, PresetInfo } from '../api/client'
 
 type RunType = 'resource-creation' | 'api-latency' | 'watch-stress'
 
@@ -16,6 +16,8 @@ export default function NewRun() {
   const [runType, setRunType] = useState<RunType>('resource-creation')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [presets, setPresets] = useState<PresetInfo[]>([])
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null)
 
   // Pod creation config
   const [resourceTypes, setResourceTypes] = useState('configmaps')
@@ -25,6 +27,26 @@ export default function NewRun() {
   const [burst, setBurst] = useState(100)
   const [spreadNamespaces, setSpreadNamespaces] = useState(5)
   const [dryRun, setDryRun] = useState(true)
+
+  // Fetch presets on mount
+  useEffect(() => {
+    fetchPresets().then(setPresets).catch(() => {})
+  }, [])
+
+  const applyPreset = (preset: PresetInfo) => {
+    setSelectedPreset(preset.name)
+    setResourceTypes(preset.resourceTypes.join(','))
+    setCount(preset.countPerType)
+    setWorkers(preset.workers)
+    setQps(preset.qps)
+    setBurst(preset.burst)
+    setSpreadNamespaces(preset.spreadNamespaces)
+    setDryRun(false)
+  }
+
+  const clearPreset = () => {
+    setSelectedPreset(null)
+  }
 
   // API latency config
   const [onlyCommon, setOnlyCommon] = useState(false)
@@ -43,6 +65,9 @@ export default function NewRun() {
 
     const config: RunConfig = {}
     if (runType === 'resource-creation') {
+      if (selectedPreset) {
+        config.preset = selectedPreset
+      }
       config.resourceTypes = resourceTypes
       config.count = count
       config.workers = workers
@@ -98,7 +123,42 @@ export default function NewRun() {
 
         {/* Pod creation config */}
         {runType === 'resource-creation' && (
-          <div className="bg-white rounded-lg p-4 shadow-sm border space-y-4">
+          <>
+            {/* Preset picker */}
+            {presets.length > 0 && (
+              <div className="bg-white rounded-lg p-4 shadow-sm border">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Quick Preset</label>
+                <div className="grid grid-cols-3 gap-3">
+                  {presets.map((p) => (
+                    <button
+                      key={p.name}
+                      type="button"
+                      onClick={() => applyPreset(p)}
+                      className={`relative px-4 py-3 rounded-lg text-sm font-medium border-2 transition-all ${
+                        selectedPreset === p.name
+                          ? 'bg-gray-900 text-white border-gray-900 shadow-md'
+                          : 'bg-white text-gray-700 border-gray-200 hover:border-gray-400 hover:shadow-sm'
+                      }`}
+                    >
+                      <div className="text-base font-bold uppercase tracking-wide">
+                        {p.name === 'small' ? 'S' : p.name === 'medium' ? 'M' : 'L'}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${selectedPreset === p.name ? 'text-gray-300' : 'text-gray-500'}`}>
+                        {(p.countPerType / 1000)}k &times; {p.resourceTypes.length} types
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {selectedPreset && (
+                  <button type="button" onClick={clearPreset}
+                    className="mt-2 text-xs text-gray-400 hover:text-gray-600 underline">
+                    Clear preset
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="bg-white rounded-lg p-4 shadow-sm border space-y-4">
             <h3 className="font-semibold text-gray-700">Resource Inflater Configuration</h3>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Resource Types" value={resourceTypes} onChange={setResourceTypes}
@@ -115,6 +175,7 @@ export default function NewRun() {
               Dry run (log what would be created without actually creating resources)
             </label>
           </div>
+          </>
         )}
 
         {/* API latency config */}

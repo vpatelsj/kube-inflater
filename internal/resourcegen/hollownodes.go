@@ -94,10 +94,14 @@ func (h *HollowNodeGenerator) TypeName() string   { return "hollownodes" }
 
 func (h *HollowNodeGenerator) IsSetupBased() bool { return true }
 
+// maxContainersPerPod is the practical upper limit of kubemark containers
+// a single DaemonSet pod can run on one physical node.
+const maxContainersPerPod = 200
+
 // Setup creates the hollow node DaemonSet and all prerequisites.
 // count is the desired total hollow node count. containersPerPod is
 // automatically scaled up when the cluster does not have enough
-// schedulable nodes to reach the requested count.
+// schedulable nodes to reach the requested count, capped at 200 per node.
 func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Interface, _ dynamic.Interface, runID string, count int, dryRun bool) (int, error) {
 	h.daemonSetName = h.generateDaemonSetName(runID)
 
@@ -113,6 +117,13 @@ func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Inter
 		logHollow("Warning: could not count schedulable nodes: %v (using containers-per-pod=%d)", err, h.opts.ContainersPerPod)
 	} else if schedulable > 0 {
 		needed := (count + schedulable - 1) / schedulable // ceil division
+		if needed > maxContainersPerPod {
+			maxCount := schedulable * maxContainersPerPod
+			logHollow("Requested %d hollow nodes exceeds max capacity (%d nodes × %d max containers = %d). Capping to %d.",
+				count, schedulable, maxContainersPerPod, maxCount, maxCount)
+			needed = maxContainersPerPod
+			count = maxCount
+		}
 		if needed > h.opts.ContainersPerPod {
 			logHollow("Auto-scaling containers-per-pod from %d to %d (%d schedulable nodes, %d hollow nodes requested)",
 				h.opts.ContainersPerPod, needed, schedulable, count)

@@ -47,6 +47,10 @@ mage build                  # → bin/kube-inflater
 # Create 1000 ConfigMaps across 10 namespaces
 ./bin/kube-inflater --resource-types=configmaps --count=1000
 
+# T-shirt size presets: small (10k), medium (50k), large (100k) of every resource type
+./bin/kube-inflater --preset=small --dry-run
+./bin/kube-inflater --preset=large
+
 # Create 100k pods on KWOK fake nodes (auto-provisioned)
 ./bin/kube-inflater --resource-types=pods --count=100000 \
   --workers=200 --qps=500 --burst=1000
@@ -80,6 +84,14 @@ A single binary for all resource inflation. Select what to create with `--resour
 ### Examples
 
 ```bash
+# T-shirt size presets — create 10k/50k/100k of every resource type in one shot
+./bin/kube-inflater --preset=small       # 10k × 9 types, 50 workers
+./bin/kube-inflater --preset=medium      # 50k × 9 types, 100 workers
+./bin/kube-inflater --preset=large       # 100k × 9 types, 200 workers
+
+# Override individual preset values
+./bin/kube-inflater --preset=small --count=5000 --resource-types=configmaps,pods
+
 # 1000 ConfigMaps and Secrets
 ./bin/kube-inflater --resource-types=configmaps,secrets --count=1000
 
@@ -120,6 +132,7 @@ A single binary for all resource inflation. Select what to create with `--resour
 
 | Flag | Default | Description |
 |---|---|---|
+| `--preset` | — | T-shirt size preset: `small` (10k), `medium` (50k), `large` (100k) of every resource type. Individual flags override preset values |
 | `--resource-types` | `configmaps` | Comma-separated resource types to create |
 | `--count` | `100` | Number of resources to create per type |
 | `--workers` | `10` | Concurrent worker goroutines |
@@ -170,7 +183,7 @@ KWOK nodes each advertise 32 vCPU, 256 GiB RAM, and 1000 pod slots. The controll
 | `--node-monitor-grace` | `240s` | Controller-manager grace period |
 | `--token-audiences` | K8s defaults | Comma-separated ServiceAccount token audiences |
 
-Hollow nodes are kubemark processes deployed via a DaemonSet. Each DaemonSet pod runs N kubelet+kube-proxy container pairs, so total hollow nodes = `scheduled pods × containers-per-pod`. The tool creates a ServiceAccount, RBAC, kubeconfig Secret (token valid for 30 days), and the DaemonSet itself, then polls until all expected nodes register as Ready.
+Hollow nodes are kubemark processes deployed via a DaemonSet. Each DaemonSet pod runs N kubelet+kube-proxy container pairs, so total hollow nodes = `scheduled pods × containers-per-pod`. The tool auto-scales `containers-per-pod` based on your cluster size, capped at 200 per node. For example, on a 200-node cluster the maximum is 40,000 hollow nodes. If the requested count exceeds capacity, it is automatically capped and logged.
 
 </details>
 
