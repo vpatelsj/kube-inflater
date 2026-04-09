@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -12,6 +13,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	cfgpkg "kube-inflater/internal/config"
+	"kube-inflater/internal/kwok"
+	"kube-inflater/internal/nodes"
 	"kube-inflater/internal/resourcegen"
 )
 
@@ -269,4 +272,136 @@ func (c *Cleanup) deleteByLabel(ctx context.Context, gvr schema.GroupVersionReso
 		}
 	}
 	return nil
+}
+
+// RunAll performs a nuclear cleanup: removes ALL resources from ALL runs,
+// all KWOK infrastructure, all hollow nodes, and all spread namespaces.
+func (c *Cleanup) RunAll(ctx context.Context) error {
+	logInfo("🧹 Starting full cleanup of ALL kube-inflater resources...")
+	dryRun := c.cfg.DryRun
+
+	// 1. Delete all hollow node DaemonSets, pods, and supporting resources
+	logInfo("Cleaning up hollow node resources...")
+	hollowGen := resourcegen.NewHollowNodeGenerator(c.cfg.HollowNodeOpts)
+	if err := hollowGen.Teardown(ctx, c.client, c.dynClient, dryRun); err != nil {
+		logWarn(fmt.Sprintf("Hollow node cleanup: %v", err))
+	}
+
+	// 2. Delete ALL kubemark nodes (any run-id)
+	logInfo("Deleting all kubemark nodes...")
+	kubemarkNames, _, err := nodes.ListKubemarkNodes(ctx, c.client)
+	if err != nil {
+		logWarn(fmt.Sprintf("Error listing kubemark nodes: %v", err))
+	} else if len(kubemarkNames) > 0 {
+		logInfo(fmt.Sprintf("Deleting %d kubemark nodes...", len(kubemarkNames)))
+		for _, name := range kubemarkNames {
+			if dryRun {
+				logInfo(fmt.Sprintf("[DRY-RUN] Would delete node %s", name))
+				continue
+			}
+			_ = c.client.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{})
+		}
+	}
+
+	// 3. Delete ALL KWOK fake nodes and controller/stages
+	logInfo("Cleaning up KWOK infrastructure...")
+	prov := kwok.NewProvisioner(c.client, c.dynClient, "", dryRun)
+	if err := prov.Cleanup(ctx, true); err != nil {
+		logWarn(fmt.Sprintf("KWOK cleanup: %v", err))
+	}
+
+	// 4. Delete all labeled namespaces (spread + any others) with cascading deletion
+	appLabel := fmt.Sprintf("app=%s", resourcegen.AppLabel)
+	logInfo("Deleting all kube-inflater namespaces...")
+	deleted := c.deleteNamespacesByLabel(ctx, appLabel, dryRun)
+
+	// 5. Delete hollow node namespace
+	hollowNS := cfgpkg.DefaultNamespace
+	if c.cfg.HollowNodeOpts != nil && c.cfg.HollowNodeOpts.Namespace != "" {
+		hollowNS = c.cfg.HollowNodeOpts.Namespace
+	}
+	if !dryRun {
+		_ = c.client.CoreV1().Namespaces().Delete(ctx, hollowNS, metav1.DeleteOptions{})
+	}
+
+	// 6. Delete CRD (StressItem)
+	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	crdName := fmt.Sprintf("%s.%s", resourcegen.CRDPlural, resourcegen.CRDGroup)
+	if dryRun {
+		logInfo(fmt.Sprintf("[DRY-RUN] Would delete CRD %s", crdName))
+	} else {
+		if err := c.dynClient.Resource(crdGVR).Delete(ctx, crdName, metav1.DeleteOptions{}); err == nil {
+			logInfo("Deleted CRD " + crdName)
+		}
+	}
+
+	// 7. Wait for namespaces to finish terminating
+	if !dryRun && deleted > 0 {
+		c.waitForNamespaceDeletion(ctx, appLabel)
+	}
+
+	logInfo("🧹 Full cleanup completed!")
+	return nil
+}
+
+// deleteNamespacesByLabel deletes non-Terminating namespaces matching the label.
+// Returns the number of delete calls issued.
+func (c *Cleanup) deleteNamespacesByLabel(ctx context.Context, labelSelector string, dryRun bool) int {
+	nsList, err := c.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		logWarn(fmt.Sprintf("Error listing namespaces: %v", err))
+		return 0
+	}
+
+	// Filter out already-Terminating namespaces
+	var toDelete []string
+	terminating := 0
+	for _, ns := range nsList.Items {
+		if ns.Status.Phase == "Terminating" {
+			terminating++
+			continue
+		}
+		toDelete = append(toDelete, ns.Name)
+	}
+
+	if terminating > 0 {
+		logInfo(fmt.Sprintf("Skipping %d namespaces already terminating", terminating))
+	}
+	if len(toDelete) == 0 {
+		if terminating > 0 {
+			logInfo("Waiting for terminating namespaces to finish...")
+		}
+		return terminating // return terminating count so caller knows to wait
+	}
+
+	logInfo(fmt.Sprintf("Deleting %d namespaces...", len(toDelete)))
+	propagation := metav1.DeletePropagationForeground
+	for _, name := range toDelete {
+		if dryRun {
+			logInfo(fmt.Sprintf("[DRY-RUN] Would delete namespace %s", name))
+			continue
+		}
+		_ = c.client.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{
+			PropagationPolicy: &propagation,
+		})
+	}
+	return len(toDelete) + terminating
+}
+
+// waitForNamespaceDeletion polls until all namespaces with the label are gone.
+func (c *Cleanup) waitForNamespaceDeletion(ctx context.Context, labelSelector string) {
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return
+		}
+		nsList, err := c.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		if err != nil || len(nsList.Items) == 0 {
+			logInfo("All namespaces deleted")
+			return
+		}
+		logInfo(fmt.Sprintf("Waiting for %d namespaces to terminate...", len(nsList.Items)))
+		time.Sleep(3 * time.Second)
+	}
+	logWarn("Timed out waiting for namespace deletion (namespaces may still be terminating)")
 }

@@ -49,6 +49,7 @@ type ResourceInflaterConfig struct {
 	Namespace        string
 	DryRun           bool
 	CleanupOnly      bool
+	CleanupAll       bool
 	PerfTests        int
 	SkipPerfTests    bool
 

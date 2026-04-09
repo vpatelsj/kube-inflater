@@ -74,6 +74,26 @@ func main() {
 	}()
 
 	// Cleanup-only mode
+	if cfg.CleanupAll {
+		logInfo("🧹 Nuclear cleanup: removing ALL kube-inflater resources")
+		cleanup := inflater.NewCleanup(clientset, dynClient, cfg)
+		if err := cleanup.RunAll(ctx); err != nil {
+			logErr(fmt.Sprintf("Full cleanup failed: %v", err))
+			os.Exit(1)
+		}
+		// Delete local report files
+		for _, dir := range []string{reportOutputDir, "/tmp/benchmark-reports"} {
+			files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+			if len(files) > 0 {
+				logInfo(fmt.Sprintf("Deleting %d report files from %s", len(files), dir))
+				for _, f := range files {
+					_ = os.Remove(f)
+				}
+			}
+		}
+		return
+	}
+
 	if cfg.CleanupOnly {
 		cleanup := inflater.NewCleanup(clientset, dynClient, cfg)
 		if err := cleanup.Run(ctx); err != nil {
@@ -247,6 +267,7 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.StringVar(&cfg.Namespace, "namespace", cfg.Namespace, "Base namespace for resource creation")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Log what would be created without creating resources")
 	flag.BoolVar(&cfg.CleanupOnly, "cleanup-only", false, "Only delete resources from a previous run")
+	flag.BoolVar(&cfg.CleanupAll, "cleanup-all", false, "Nuclear cleanup: delete ALL kube-inflater resources, KWOK, hollow nodes, namespaces, and CRDs")
 	flag.StringVar(&cfg.RunID, "run-id", "", "Run ID (for cleanup; auto-generated if empty)")
 	flag.IntVar(&cfg.KWOKNodes, "kwok-nodes", cfgpkg.DefaultKWOKNodes, "Number of KWOK fake nodes to provision (auto-scaled up if needed)")
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")

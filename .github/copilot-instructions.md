@@ -7,8 +7,6 @@ This repo uses [Mage](https://magefile.org/) as the build tool (`magefile.go`).
 ```bash
 # Build all binaries
 mage build              # kube-inflater (unified binary) → bin/kube-inflater
-mage cleanupNodes       # cleanup-nodes
-mage etcdTester         # etcd-tester (separate module in etcd-tester/)
 mage benchmarkUI        # benchmark-ui → bin/benchmark-ui
 
 # Build frontend (React + Vite)
@@ -27,8 +25,6 @@ go test ./internal/resourcegen/... -run TestGenerators
 # Clean
 mage clean
 ```
-
-`etcd-tester/` is a **separate Go module** — build it via `mage etcdTester`, not from the root.
 
 ## Architecture
 

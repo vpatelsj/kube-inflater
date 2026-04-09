@@ -59,6 +59,9 @@ type Engine struct {
 	dynClient dynamic.Interface
 	cfg       *cfgpkg.ResourceInflaterConfig
 	Results   []InflationSummary
+	// setupGens stores generators used for setup-based types (e.g. hollownodes)
+	// so that Verify() can access the correct DaemonSet name for label queries.
+	setupGens map[string]resourcegen.SetupTeardownGenerator
 }
 
 // NewEngine creates a new inflater engine.
@@ -164,6 +167,12 @@ func (e *Engine) inflateSetupType(ctx context.Context, gen resourcegen.SetupTear
 	if err != nil {
 		return fmt.Errorf("setup for %s: %w", typeName, err)
 	}
+
+	// Store the generator so Verify() can access it (e.g. for DaemonSet name)
+	if e.setupGens == nil {
+		e.setupGens = make(map[string]resourcegen.SetupTeardownGenerator)
+	}
+	e.setupGens[typeName] = gen
 
 	if !e.cfg.DryRun {
 		waitTimeout := e.cfg.HollowNodeWaitTimeout
@@ -409,9 +418,16 @@ func (e *Engine) Verify(ctx context.Context) error {
 			continue
 		}
 
-		// Setup-based generators (hollownodes) — count nodes by label
-		if setupGen, ok := gen.(resourcegen.SetupTeardownGenerator); ok && setupGen.IsSetupBased() {
-			actual, err := e.countClusterResources(ctx, gen.GVR(), labelSelector)
+		// Setup-based generators (hollownodes) — count nodes by DaemonSet run-id label
+		if _, ok := gen.(resourcegen.SetupTeardownGenerator); ok {
+			// Use the stored generator from inflation (has the correct DaemonSet name)
+			verifySelector := labelSelector
+			if storedGen, found := e.setupGens[result.ResourceType]; found {
+				if hn, ok := storedGen.(*resourcegen.HollowNodeGenerator); ok && hn.DaemonSetName() != "" {
+					verifySelector = fmt.Sprintf("kubemark=true,%s=%s", resourcegen.RunIDLabel, hn.DaemonSetName())
+				}
+			}
+			actual, err := e.countClusterResources(ctx, gen.GVR(), verifySelector)
 			if err != nil {
 				logWarn(fmt.Sprintf("  ✗ %s: verification failed: %v", result.ResourceType, err))
 				allPassed = false
@@ -460,6 +476,7 @@ func (e *Engine) Verify(ctx context.Context) error {
 		logInfo("🔍 Verification passed — all resources confirmed")
 	} else {
 		logWarn("🔍 Verification found mismatches (see above)")
+		return fmt.Errorf("verification failed: some resource counts do not match")
 	}
 	return nil
 }

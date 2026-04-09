@@ -87,15 +87,17 @@ func (h *HollowNodeGenerator) GVR() schema.GroupVersionResource {
 }
 
 func (h *HollowNodeGenerator) IsNamespaced() bool { return false }
-func (h *HollowNodeGenerator) Kind() string        { return "Node" }
-func (h *HollowNodeGenerator) TypeName() string     { return "hollownodes" }
+func (h *HollowNodeGenerator) Kind() string       { return "Node" }
+func (h *HollowNodeGenerator) TypeName() string   { return "hollownodes" }
 
 // --- SetupTeardownGenerator interface ---
 
 func (h *HollowNodeGenerator) IsSetupBased() bool { return true }
 
 // Setup creates the hollow node DaemonSet and all prerequisites.
-// count is the desired total hollow node count (used for logging/validation).
+// count is the desired total hollow node count. containersPerPod is
+// automatically scaled up when the cluster does not have enough
+// schedulable nodes to reach the requested count.
 func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Interface, _ dynamic.Interface, runID string, count int, dryRun bool) (int, error) {
 	h.daemonSetName = h.generateDaemonSetName(runID)
 
@@ -103,6 +105,21 @@ func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Inter
 		logHollow("[DRY-RUN] Would create hollow node DaemonSet %s in %s (containers-per-pod=%d)",
 			h.daemonSetName, h.opts.Namespace, h.opts.ContainersPerPod)
 		return count, nil
+	}
+
+	// Auto-scale containersPerPod so that schedulableNodes * containersPerPod >= count
+	schedulable, err := h.countSchedulableNodes(ctx, client)
+	if err != nil {
+		logHollow("Warning: could not count schedulable nodes: %v (using containers-per-pod=%d)", err, h.opts.ContainersPerPod)
+	} else if schedulable > 0 {
+		needed := (count + schedulable - 1) / schedulable // ceil division
+		if needed > h.opts.ContainersPerPod {
+			logHollow("Auto-scaling containers-per-pod from %d to %d (%d schedulable nodes, %d hollow nodes requested)",
+				h.opts.ContainersPerPod, needed, schedulable, count)
+			h.opts.ContainersPerPod = needed
+		}
+	} else {
+		logHollow("Warning: no schedulable worker nodes found for hollow node DaemonSet")
 	}
 
 	if err := h.ensureNamespace(ctx, client); err != nil {
@@ -121,7 +138,12 @@ func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Inter
 		return 0, fmt.Errorf("creating DaemonSet: %w", err)
 	}
 
-	return count, nil
+	// Return the actual expected count (may exceed requested count due to ceil rounding)
+	expected := count
+	if schedulable > 0 {
+		expected = schedulable * h.opts.ContainersPerPod
+	}
+	return expected, nil
 }
 
 // WaitForReady polls until the expected number of hollow nodes are registered and Ready.
@@ -363,6 +385,18 @@ func (h *HollowNodeGenerator) createDaemonSet(ctx context.Context, client kubern
 	logHollow("Creating DaemonSet %s (containersPerPod=%d)", ds.Name, h.opts.ContainersPerPod)
 	_, err := client.AppsV1().DaemonSets(h.opts.Namespace).Create(ctx, ds, metav1.CreateOptions{})
 	return err
+}
+
+// countSchedulableNodes returns the number of nodes that match the DaemonSet's
+// scheduling requirements (worker nodes, not control-plane, not kubemark, not KWOK, instance-type=k3s).
+func (h *HollowNodeGenerator) countSchedulableNodes(ctx context.Context, client kubernetes.Interface) (int, error) {
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: "node-role.kubernetes.io/worker,!node-role.kubernetes.io/control-plane,!kubemark,!type,node.kubernetes.io/instance-type=k3s",
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(nodes.Items), nil
 }
 
 func (h *HollowNodeGenerator) deriveExpectedCount(ctx context.Context, client kubernetes.Interface) int {

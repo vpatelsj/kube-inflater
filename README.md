@@ -1,21 +1,21 @@
 # kube-inflater
 
-Kubernetes scalability and stress-testing toolkit. Bulk-create API resources at rates exceeding 200/sec, inflate clusters with hundreds of thousands of hollow kubemark nodes, stress-test the watch subsystem to 100k+ concurrent connections, benchmark every API endpoint, and probe etcd directly — all from a single repo with a unified web UI.
+Kubernetes scalability and stress-testing toolkit. Bulk-create API resources at rates exceeding 200/sec, inflate clusters with hundreds of thousands of hollow kubemark nodes, stress-test the watch subsystem to 100k+ concurrent connections, and monitor it all from a unified web UI.
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         kube-inflater                            │
-├──────────┬────────────┬────────────┬─────────────┬──────────────┤
-│ inflater │watch-agent │ perf-report│cleanup-nodes│ benchmark-ui │
-│ engine   │ watch+     │            │             │  (React/Go)  │
-│          │ mutate     │            │             │              │
-├──────────┴────┬───────┴──────┬─────┴─────┬───────┴──────────────┤
-│  resourcegen  │  watchstress │   perfv2  │     benchmarkio      │
-│  (10 types)   │              │           │   (3 report types)   │
-├───────────────┼──────────────┤           ├──────────────────────┤
-│ plan · kwok · │  clustermon  │           │    etcd-tester       │
-│ daemonsetspec │              │           │  (separate module)   │
-└───────────────┴──────────────┴───────────┴──────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                       kube-inflater                      │
+├──────────┬────────────┬───────────┬──────────────────────┤
+│ inflater │watch-agent │   perfv2  │    benchmark-ui      │
+│ engine   │ watch+     │           │     (React/Go)       │
+│          │ mutate     │           │                      │
+├──────────┴────┬───────┴─────┬─────┴──────────────────────┤
+│  resourcegen  │ watchstress │       benchmarkio          │
+│  (10 types)   │             │     (3 report types)       │
+├───────────────┼─────────────┤                            │
+│ plan · kwok · │  clustermon │                            │
+│ daemonsetspec │             │                            │
+└───────────────┴─────────────┴────────────────────────────┘
 ```
 
 ---
@@ -27,10 +27,6 @@ Kubernetes scalability and stress-testing toolkit. Bulk-create API resources at 
 - [kube-inflater — Resource Inflater](#kube-inflater--resource-inflater)
 - [watch-agent — Watch Stress Testing](#watch-agent--watch-stress-testing)
 - [benchmark-ui — Web Dashboard](#benchmark-ui--web-dashboard)
-- [perf-report — API Latency Reports](#perf-report--api-latency-reports)
-- [cleanup-nodes — Node & Pod Cleanup](#cleanup-nodes--node--pod-cleanup)
-- [analyze-notready — NotReady Node Inspector](#analyze-notready--notready-node-inspector)
-- [etcd-tester — etcd Probe](#etcd-tester--etcd-probe)
 - [Core Concepts](#core-concepts)
 - [Project Layout](#project-layout)
 - [Build Targets](#build-targets-mage)
@@ -70,11 +66,6 @@ mage benchmarkUI && cd ui && npm install && npm run build && cd ..
 | `kube-inflater` | `cmd/kube-resource-inflater/` | Bulk-create any resource type — ConfigMaps, Secrets, Pods, Jobs, StatefulSets, CRDs, Services, Namespaces, ServiceAccounts, and hollow kubemark nodes |
 | `watch-agent` | `cmd/watch-agent/` | Open thousands of concurrent watch connections (`watch`) or generate mutations (`mutate`); measures event throughput, delivery latency, and reconnect behavior |
 | `benchmark-ui` | `cmd/benchmark-ui/` + `ui/` | Web dashboard (Go server + React SPA) to launch runs, monitor them live, view interactive charts, and export PDFs |
-| `perf-report` | `cmd/perf-report/` | Auto-discover all API endpoints and benchmark GET/LIST latency; outputs markdown or JSON |
-| `cleanup-nodes` | `cmd/cleanup-nodes/` | Surgically remove zombie nodes, NotReady nodes, and problematic pods with concurrent deletion |
-| `analyze-notready` | `cmd/analyze-notready/` | Correlate NotReady hollow nodes with their physical hosts; identify per-node health |
-| `discover-endpoints` | `cmd/discover-endpoints/` | List all API server resource endpoints with verb/scope information |
-| `etcd-tester` | `etcd-tester/` | Direct etcd connectivity and write-throughput testing (separate Go module) |
 
 ---
 
@@ -117,6 +108,9 @@ A single binary for all resource inflation. Select what to create with `--resour
 
 # Cleanup a specific run by ID
 ./bin/kube-inflater --cleanup-only --run-id=20260406-145106-2239
+
+# Nuclear cleanup — remove all resources from all runs
+./bin/kube-inflater --cleanup-all
 ```
 
 ### Flag Reference
@@ -140,6 +134,7 @@ A single binary for all resource inflation. Select what to create with `--resour
 | `--data-size` | varies | Payload size in bytes for ConfigMaps/Secrets (max 1 MB) |
 | `--dry-run` | `false` | Log what would be created without touching the cluster |
 | `--cleanup-only` | `false` | Delete resources from a previous run then exit |
+| `--cleanup-all` | `false` | Delete all resources from all runs (hollow nodes, KWOK, namespaces, CRDs, reports) then exit |
 | `--run-id` | auto | Run ID for labeling and scoped cleanup; auto-generated as `YYYYMMDD-HHMMSS-RAND` |
 | `--benchmark-report` | `false` | Run API latency tests after creation and generate a markdown report |
 | `--json-report` | `true` | Write a JSON report file for the benchmark UI; disable with `--json-report=false` |
@@ -286,15 +281,12 @@ cd ui && npm install && npm run build && cd ..
 
 ### Generating Reports
 
-All three CLI tools can write JSON reports that the UI consumes:
+Both CLI tools can write JSON reports that the UI consumes:
 
 ```bash
 # Resource creation report
 ./bin/kube-inflater --resource-types=pods --count=5000 \
   --json-report --report-output-dir=./benchmark-reports
-
-# API latency report
-./bin/perf-report --json --output-dir=./benchmark-reports
 
 # Watch stress report
 ./bin/watch-agent watch --connections=100 --duration=60 \
@@ -303,86 +295,7 @@ All three CLI tools can write JSON reports that the UI consumes:
 
 Every report page includes a **PDF Export** button (renders the page to canvas via html2canvas, then converts to multi-page PDF with jsPDF).
 
----
 
-## perf-report — API Latency Reports
-
-Auto-discovers all API server endpoints via the discovery API and benchmarks GET/LIST latency with `?limit=1` to minimize payload. Sorts results by API group priority. Outputs a timestamped markdown report with top-10 slowest endpoints and summary statistics.
-
-```bash
-./bin/perf-report                              # Full report (limit=1 per request)
-./bin/perf-report --only-common                # Only common endpoints (faster)
-./bin/perf-report --no-limits                  # Download full resource lists (caution on large clusters)
-./bin/perf-report --json --output-dir /tmp     # Also write JSON for the benchmark UI
-```
-
----
-
-## cleanup-nodes — Node & Pod Cleanup
-
-Targeted cleanup of hollow/kubemark nodes and problematic pods with concurrent deletion, rate-limit controls, and a dry-run preview.
-
-```bash
-./bin/cleanup-nodes --dry-run                          # Preview what would be deleted
-./bin/cleanup-nodes --zombie-only --force               # Remove nodes without backing pods
-./bin/cleanup-nodes --notready-only --force             # Remove NotReady nodes
-./bin/cleanup-nodes -l kubemark=true --force            # Delete all nodes matching a label selector
-./bin/cleanup-nodes --include-pods --pending-only       # Also clean Pending pods
-./bin/cleanup-nodes --include-pods --failed-only        # Also clean Failed pods
-./bin/cleanup-nodes --concurrency=50 --delay=5          # Tune deletion speed
-```
-
-<details>
-<summary>All flags</summary>
-
-| Flag | Default | Description |
-|---|---|---|
-| `--dry-run` | `false` | Show what would be deleted without acting |
-| `--zombie-only` | `false` | Delete only zombie nodes (no corresponding pod) |
-| `--notready-only` | `false` | Delete only NotReady nodes |
-| `--force` | `false` | Force delete with zero grace period (skip confirmation) |
-| `-l`, `--label-selector` | — | Delete all nodes matching this label selector |
-| `--include-pods` | `false` | Also analyze and cleanup problematic pods |
-| `--pending-only` | `false` | Only delete Pending pods (requires `--include-pods`) |
-| `--failed-only` | `false` | Only delete Failed pods (requires `--include-pods`) |
-| `--concurrency` | `10` | Concurrent deletions |
-| `--delay` | `10ms` | Delay between deletions |
-| `--namespace` | `kubemark-incremental-test` | Namespace to check for hollow node pods |
-| `--disable-rate-limit` | `false` | Disable client-side rate limiting |
-
-</details>
-
----
-
-## analyze-notready — NotReady Node Inspector
-
-Groups hollow nodes by the physical host they run on and shows per-host counts of NotReady nodes, non-running pods (Pending/Failed/Unknown), zombie nodes, and running pods. Helps pinpoint which physical machines are unhealthy.
-
-```bash
-./bin/analyze-notready                                 # Default summary
-./bin/analyze-notready --details                       # Show detailed pod information
-./bin/analyze-notready --pod-status                    # Show non-running pod reasons
-./bin/analyze-notready --sort=zombie                   # Sort by zombie count
-```
-
-Sort options: `notready` (default), `total`, `node`, `nonrunning`, `zombie`.
-
----
-
-## etcd-tester — etcd Probe
-
-A separate Go module (`etcd-tester/`) for direct etcd connectivity and performance testing. Supports TLS and authentication.
-
-**Connectivity mode** — runs a comprehensive test suite covering connection, KV operations, range/list, watch, lease/TTL, auth, performance (100 PUTs/GETs), and Kubernetes-pattern simulations (pod registry, conditional updates, node registration/heartbeat).
-
-**Performance mode** — simulates N kubelet nodes against etcd with concurrent registration, 10-second heartbeats, periodic status updates, 5% node churn every 30 seconds, and a watch on `registry/nodes/*`.
-
-```bash
-mage etcdTester
-./bin/etcd-tester localhost:2379                  # Connectivity test suite
-./bin/etcd-tester perf localhost:2379 1000 5      # 1000 simulated nodes, 5-minute run
-./bin/etcd-tester perf localhost:2379 5000 0      # 5000 nodes, run indefinitely
-```
 
 ---
 
@@ -430,10 +343,6 @@ cmd/
   kube-resource-inflater/   Unified inflater CLI (builds as kube-inflater)
   watch-agent/              Watch stress agent (watch + mutate subcommands)
   benchmark-ui/             Web UI server (Go HTTP + SPA)
-  perf-report/              API latency report generator
-  cleanup-nodes/            Node/pod cleanup utility
-  analyze-notready/         NotReady node analyzer
-  discover-endpoints/       API endpoint lister
 internal/
   config/                   Shared configuration types and defaults
   inflater/                 Resource creation engine + cleanup with worker pools
@@ -448,7 +357,6 @@ internal/
   clustermon/               Live cluster state snapshot monitor
 deploy/
   watch-agent/              Kubernetes manifests (Job, RBAC, FlowSchema)
-etcd-tester/                Standalone etcd test module (separate go.mod)
 scripts/
   watch-ramp-cluster.sh     Multi-round watch ramp-up orchestrator
   upgrade-control-plane.sh  SSH-based multi-node K8s component upgrade
@@ -462,13 +370,8 @@ ui/                         React + Vite + Tailwind frontend for benchmark-ui
 ```bash
 mage -l                    # List all targets
 mage build                 # Build kube-inflater (unified binary) → bin/kube-inflater
-mage cleanupNodes          # Build cleanup-nodes → bin/cleanup-nodes
 mage benchmarkUI           # Build benchmark-ui server → bin/benchmark-ui
 mage frontendBuild         # Build React frontend (npm run build in ui/)
-mage etcdTester            # Build etcd-tester → bin/etcd-tester (separate module)
-mage perfReport            # Build & run perf-report (latency mode, limit=1)
-mage perfReportFull        # Build & run perf-report (full data, no limits)
-mage analyzeNotReady       # Build & run NotReady analyzer
 mage test                  # Run all unit tests (go test ./...)
 mage clean                 # Remove bin/
 ```
@@ -479,9 +382,6 @@ Or build directly with Go:
 go build -o bin/kube-inflater ./cmd/kube-resource-inflater
 go build -o bin/watch-agent ./cmd/watch-agent
 go build -o bin/benchmark-ui ./cmd/benchmark-ui
-go build -o bin/perf-report ./cmd/perf-report
-go build -o bin/cleanup-nodes ./cmd/cleanup-nodes
-cd etcd-tester && go build -o ../bin/etcd-tester
 ```
 
 ## Requirements
