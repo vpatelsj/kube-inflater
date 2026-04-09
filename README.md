@@ -58,6 +58,9 @@ mage build                  # → bin/kube-inflater
 # Open 100 concurrent watch connections for 60 seconds
 mage build && ./bin/watch-agent watch --connections=100 --duration=60
 
+# Build & push the watch-agent container image (needed for in-cluster watch stress)
+mage watchAgent
+
 # Launch the web UI
 mage benchmarkUI && cd ui && npm install && npm run build && cd ..
 ./bin/benchmark-ui --reports-dir=./benchmark-reports --port=8080
@@ -384,6 +387,7 @@ ui/                         React + Vite + Tailwind frontend for benchmark-ui
 mage -l                    # List all targets
 mage build                 # Build kube-inflater (unified binary) → bin/kube-inflater
 mage benchmarkUI           # Build benchmark-ui server → bin/benchmark-ui
+mage watchAgent            # Build & push watch-agent container image
 mage frontendBuild         # Build React frontend (npm run build in ui/)
 mage test                  # Run all unit tests (go test ./...)
 mage clean                 # Remove bin/

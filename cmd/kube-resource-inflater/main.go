@@ -23,6 +23,7 @@ import (
 	"kube-inflater/internal/kwok"
 	"kube-inflater/internal/perfv2"
 	"kube-inflater/internal/resourcegen"
+	"kube-inflater/internal/watchdeploy"
 )
 
 func main() {
@@ -35,6 +36,14 @@ func main() {
 		cfg.CountPerType, cfg.Workers, cfg.QPS, cfg.Burst))
 	if cfg.HasPodBearingTypes() {
 		logInfo("KWOK auto-enabled for pod-bearing resource types")
+	}
+	if cfg.HasWatchPhase() {
+		durLabel := "continuous"
+		if cfg.WatchDuration > 0 {
+			durLabel = cfg.WatchDuration.String()
+		}
+		logInfo(fmt.Sprintf("Watch phase: %d connections, %s, mutator %d ops/s",
+			cfg.WatchConnections, durLabel, cfg.MutatorRate))
 	}
 
 	// Build clients
@@ -116,6 +125,37 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Watch stress phase — deploy watch-agent Jobs in-cluster, they run throughout resource creation
+	var watchDeployer *watchdeploy.Deployer
+	if cfg.HasWatchPhase() {
+		logInfo(fmt.Sprintf("📡 Deploying watch-agent: %d connections, stagger %v, mutator %d ops/s (in-cluster)",
+			cfg.WatchConnections, cfg.WatchStagger, cfg.MutatorRate))
+
+		watchTypes := cfg.WatchTypes
+		if len(watchTypes) == 0 {
+			watchTypes = []string{"customresources"}
+		}
+
+		watchDeployer = watchdeploy.NewDeployer(clientset, watchdeploy.Config{
+			Image:            cfg.WatchAgentImage,
+			Connections:      cfg.WatchConnections,
+			Stagger:          cfg.WatchStagger,
+			WatchTypes:       watchTypes,
+			StressNamespace:  cfg.Namespace,
+			SpreadCount:      cfg.SpreadNamespaces,
+			MutatorRate:      cfg.MutatorRate,
+			MutatorBatchSize: cfg.MutatorBatchSize,
+			DataSizeBytes:    cfg.DataSizeBytes,
+			RunID:            cfg.RunID,
+			DryRun:           cfg.DryRun,
+		})
+
+		if err := watchDeployer.Deploy(ctx); err != nil {
+			logErr(fmt.Sprintf("Watch deploy failed: %v", err))
+			os.Exit(1)
+		}
+	}
+
 	if err := engine.EnsureKWOK(ctx); err != nil {
 		logErr(fmt.Sprintf("Failed ensuring KWOK: %v", err))
 		os.Exit(1)
@@ -130,6 +170,47 @@ func main() {
 	if err := engine.Verify(ctx); err != nil {
 		logErr(fmt.Sprintf("Verification failed: %v", err))
 		os.Exit(1)
+	}
+
+	// Stop watch-agent Jobs, collect results, write report
+	if watchDeployer != nil {
+		logInfo("📡 Waiting for watch-agent pods to complete, collecting results...")
+		result, err := watchDeployer.WaitAndCollect(ctx)
+		if err != nil {
+			logWarn(fmt.Sprintf("Watch collect failed: %v", err))
+		}
+		if result != nil && result.WatchSummary != nil {
+			ws := result.WatchSummary
+			logInfo(fmt.Sprintf("📡 Watch results: %d events (%.0f/s), %d reconnects, %d errors, peak %d watches",
+				ws.TotalEvents, ws.EventsPerSecond, ws.Reconnects, ws.Errors, ws.PeakAliveWatches))
+		}
+		if result != nil && result.MutatorSummary != nil {
+			ms := result.MutatorSummary
+			logInfo(fmt.Sprintf("📡 Mutator results: %d creates, %d updates, %d deletes (%.1f ops/s)",
+				ms.Creates, ms.Updates, ms.Deletes, ms.ActualRate))
+		}
+
+		// Write watch stress JSON report
+		if jsonReport && result != nil && result.WatchSummary != nil {
+			watchTypes := cfg.WatchTypes
+			if len(watchTypes) == 0 {
+				watchTypes = []string{"customresources"}
+			}
+			bioCfg := benchmarkio.WatchStressConfig{
+				Connections:   cfg.WatchConnections,
+				DurationSec:   int(result.WatchSummary.Duration.Seconds()),
+				StaggerSec:    int(cfg.WatchStagger.Seconds()),
+				ResourceTypes: watchTypes,
+				Namespace:     cfg.Namespace,
+				SpreadCount:   cfg.SpreadNamespaces,
+			}
+			path, writeErr := benchmarkio.WriteWatchStressReport(reportOutputDir, cfg.RunID, bioCfg, result.WatchSummary, result.MutatorSummary)
+			if writeErr != nil {
+				logErr(fmt.Sprintf("Failed writing watch stress report: %v", writeErr))
+			} else {
+				logInfo(fmt.Sprintf("Watch stress report written to %s", path))
+			}
+		}
 	}
 
 	// Generate benchmark report if requested
@@ -277,6 +358,20 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.BoolVar(&jsonReport, "json-report", true, "Generate a JSON benchmark report (for benchmark-ui); use --json-report=false to disable")
 	flag.StringVar(&reportOutputDir, "report-output-dir", "./benchmark-reports", "Directory to save the benchmark report")
 
+	// Watch stress flags (set automatically by presets, can be overridden)
+	watchDurationSec := 0
+	watchStaggerSec := 0
+	mutatorDurationSec := 0
+	watchTypesCSV := ""
+	flag.IntVar(&cfg.WatchConnections, "watch-connections", 0, "Number of concurrent watch connections (0=skip watch phase)")
+	flag.IntVar(&watchDurationSec, "watch-duration", 0, "Watch phase duration in seconds (0=run until resource creation completes)")
+	flag.IntVar(&watchStaggerSec, "watch-stagger", 0, "Seconds to stagger watch connection setup")
+	flag.StringVar(&watchTypesCSV, "watch-types", "customresources", "Comma-separated resource types to watch")
+	flag.StringVar(&cfg.WatchAgentImage, "watch-agent-image", "k3sacr1.azurecr.io/watch-agent:latest", "Container image for in-cluster watch-agent pods")
+	flag.IntVar(&cfg.MutatorRate, "mutator-rate", 0, "Mutations per second during watch phase")
+	flag.IntVar(&mutatorDurationSec, "mutator-duration", 0, "Mutator duration in seconds (defaults to watch-duration)")
+	flag.IntVar(&cfg.MutatorBatchSize, "mutator-batch-size", 10, "Items per mutator create/update/delete cycle")
+
 	// Hollow node flags (used when --resource-types includes "hollownodes")
 	hollowOpts := &cfgpkg.HollowNodeOpts{
 		ContainersPerPod:  cfgpkg.DefaultContainersPerPod,
@@ -338,11 +433,41 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 			// already written
 		case "batch-pause":
 			// handled below
+		case "watch-connections":
+			// already written
+		case "watch-duration":
+			// handled below
+		case "watch-stagger":
+			// handled below
+		case "watch-types":
+			cfg.WatchTypes = parseCSV(watchTypesCSV)
+		case "mutator-rate":
+			// already written
+		case "mutator-duration":
+			// handled below
+		case "mutator-batch-size":
+			// already written
 		}
 	})
 
 	cfg.BatchPause = time.Duration(batchPauseSec) * time.Second
 	cfg.QPS = float32(qps)
+
+	// Convert watch duration flags (explicit flags override preset values)
+	if watchDurationSec > 0 {
+		cfg.WatchDuration = time.Duration(watchDurationSec) * time.Second
+	}
+	if watchStaggerSec > 0 {
+		cfg.WatchStagger = time.Duration(watchStaggerSec) * time.Second
+	}
+	if mutatorDurationSec > 0 {
+		cfg.MutatorDuration = time.Duration(mutatorDurationSec) * time.Second
+	} else if cfg.MutatorDuration == 0 && cfg.WatchDuration > 0 {
+		cfg.MutatorDuration = cfg.WatchDuration
+	}
+	if len(cfg.WatchTypes) == 0 && watchTypesCSV != "" {
+		cfg.WatchTypes = parseCSV(watchTypesCSV)
+	}
 
 	// Parse resource types (only if preset was NOT used and flag was not explicitly set)
 	if presetName == "" {

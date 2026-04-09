@@ -43,14 +43,14 @@ func main() {
 
 func runWatch() {
 	var (
-		connections  int
-		durationSec  int
-		staggerSec   int
-		resourceType string
-		namespace    string
-		spreadCount  int
-		qps          float64
-		burst        int
+		connections   int
+		durationSec   int
+		staggerSec    int
+		resourceType  string
+		namespace     string
+		spreadCount   int
+		qps           float64
+		burst         int
 		jsonReportDir string
 	)
 
@@ -164,6 +164,11 @@ func pushResultsConfigMap(resultJSON []byte) {
 	labels := map[string]string{
 		"app": "watch-agent",
 	}
+	role := os.Getenv("ROLE")
+	if role == "" {
+		role = "watcher"
+	}
+	labels["role"] = role
 	if runID != "" {
 		labels["run-id"] = runID
 	}
@@ -248,6 +253,10 @@ func runMutate() {
 		fmt.Fprintf(os.Stderr, "failed to encode result: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Push results to ConfigMap for collection by kube-inflater
+	resultJSON, _ := json.Marshal(summary)
+	pushResultsConfigMap(resultJSON)
 }
 
 func mustDynClient(qps float64, burst int) dynamic.Interface {

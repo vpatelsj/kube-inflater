@@ -144,7 +144,7 @@ export default function NewRun() {
                         {p.name === 'small' ? 'S' : p.name === 'medium' ? 'M' : 'L'}
                       </div>
                       <div className={`text-xs mt-0.5 ${selectedPreset === p.name ? 'text-gray-300' : 'text-gray-500'}`}>
-                        {(p.countPerType / 1000)}k &times; {p.resourceTypes.length} types
+                        {(p.countPerType / 1000)}k &times; {p.resourceTypes.length} types + {p.watchConnections} watches
                       </div>
                     </button>
                   ))}

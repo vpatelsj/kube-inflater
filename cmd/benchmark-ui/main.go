@@ -600,6 +600,8 @@ func handlePresets() http.HandlerFunc {
 		QPS              float32  `json:"qps"`
 		Burst            int      `json:"burst"`
 		SpreadNamespaces int      `json:"spreadNamespaces"`
+		WatchConnections int      `json:"watchConnections"`
+		MutatorRate      int      `json:"mutatorRate"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -618,6 +620,8 @@ func handlePresets() http.HandlerFunc {
 				QPS:              p.QPS,
 				Burst:            p.Burst,
 				SpreadNamespaces: p.SpreadNamespaces,
+				WatchConnections: p.WatchConnections,
+				MutatorRate:      p.MutatorRate,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")

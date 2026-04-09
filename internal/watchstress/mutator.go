@@ -41,7 +41,12 @@ func (m *Mutator) Run(ctx context.Context) (*MutatorSummary, error) {
 	logInfo(fmt.Sprintf("Starting mutator: rate=%d/s, duration=%v, batch=%d, namespaces=%d",
 		m.cfg.Rate, m.cfg.Duration, m.cfg.BatchSize, m.cfg.SpreadCount))
 
-	ctx, cancel := context.WithTimeout(ctx, m.cfg.Duration)
+	var cancel context.CancelFunc
+	if m.cfg.Duration > 0 {
+		ctx, cancel = context.WithTimeout(ctx, m.cfg.Duration)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
 	var creates, updates, deletes, errors atomic.Int64

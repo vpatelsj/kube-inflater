@@ -16,6 +16,7 @@ import (
 	"kube-inflater/internal/kwok"
 	"kube-inflater/internal/nodes"
 	"kube-inflater/internal/resourcegen"
+	"kube-inflater/internal/watchdeploy"
 )
 
 // Cleanup deletes all resources created by a specific run or all runs.
@@ -288,18 +289,22 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 	}
 
 	// 2. Delete ALL kubemark nodes (any run-id)
-	logInfo("Deleting all kubemark nodes...")
 	kubemarkNames, _, err := nodes.ListKubemarkNodes(ctx, c.client)
 	if err != nil {
 		logWarn(fmt.Sprintf("Error listing kubemark nodes: %v", err))
 	} else if len(kubemarkNames) > 0 {
 		logInfo(fmt.Sprintf("Deleting %d kubemark nodes...", len(kubemarkNames)))
-		for _, name := range kubemarkNames {
-			if dryRun {
-				logInfo(fmt.Sprintf("[DRY-RUN] Would delete node %s", name))
-				continue
+		if dryRun {
+			logInfo(fmt.Sprintf("[DRY-RUN] Would delete %d kubemark nodes", len(kubemarkNames)))
+		} else {
+			deleted := 0
+			for _, name := range kubemarkNames {
+				_ = c.client.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{})
+				deleted++
+				if deleted%100 == 0 || deleted == len(kubemarkNames) {
+					logInfo(fmt.Sprintf("  %d/%d kubemark nodes deleted", deleted, len(kubemarkNames)))
+				}
 			}
-			_ = c.client.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{})
 		}
 	}
 
@@ -324,7 +329,14 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 		_ = c.client.CoreV1().Namespaces().Delete(ctx, hollowNS, metav1.DeleteOptions{})
 	}
 
-	// 6. Delete CRD (StressItem)
+	// 6. Delete watch-agent resources (Jobs, ConfigMaps, RBAC, FlowSchema, namespace)
+	logInfo("Cleaning up watch-agent resources...")
+	wd := watchdeploy.NewDeployer(c.client, watchdeploy.Config{DryRun: dryRun})
+	if err := wd.Cleanup(ctx); err != nil {
+		logWarn(fmt.Sprintf("Watch-agent cleanup: %v", err))
+	}
+
+	// 7. Delete CRD (StressItem)
 	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	crdName := fmt.Sprintf("%s.%s", resourcegen.CRDPlural, resourcegen.CRDGroup)
 	if dryRun {
@@ -335,7 +347,7 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 		}
 	}
 
-	// 7. Wait for namespaces to finish terminating
+	// 8. Wait for namespaces to finish terminating
 	if !dryRun && deleted > 0 {
 		c.waitForNamespaceDeletion(ctx, appLabel)
 	}

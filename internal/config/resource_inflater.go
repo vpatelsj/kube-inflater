@@ -60,6 +60,16 @@ type ResourceInflaterConfig struct {
 	// Hollow node options — used when resource-types includes "hollownodes"
 	HollowNodeOpts        *HollowNodeOpts
 	HollowNodeWaitTimeout time.Duration
+
+	// Watch stress options — set by preset or explicit flags
+	WatchConnections int
+	WatchDuration    time.Duration
+	WatchStagger     time.Duration
+	WatchTypes       []string
+	WatchAgentImage  string
+	MutatorRate      int
+	MutatorDuration  time.Duration
+	MutatorBatchSize int
 }
 
 // HasPodBearingTypes returns true if any of the configured resource types create pods.
@@ -70,4 +80,9 @@ func (c *ResourceInflaterConfig) HasPodBearingTypes() bool {
 		}
 	}
 	return false
+}
+
+// HasWatchPhase returns true if watch stress parameters are configured.
+func (c *ResourceInflaterConfig) HasWatchPhase() bool {
+	return c.WatchConnections > 0
 }

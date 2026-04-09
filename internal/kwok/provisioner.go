@@ -450,169 +450,173 @@ func (p *Provisioner) ensureStages(ctx context.Context) error {
 }
 
 func (p *Provisioner) ensureServiceAccount(ctx context.Context) error {
-sa := &unstructured.Unstructured{
-Object: map[string]interface{}{
-"apiVersion": "v1",
-"kind":       "ServiceAccount",
-"metadata": map[string]interface{}{
-"name":      KWOKDeploymentName,
-"namespace": KWOKNamespace,
-},
-},
-}
-_, err := p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Create(ctx, sa, metav1.CreateOptions{})
-if err != nil {
-if _, getErr := p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Get(ctx, KWOKDeploymentName, metav1.GetOptions{}); getErr != nil {
-return fmt.Errorf("creating KWOK service account: %w", err)
-}
-}
-return nil
+	sa := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ServiceAccount",
+			"metadata": map[string]interface{}{
+				"name":      KWOKDeploymentName,
+				"namespace": KWOKNamespace,
+			},
+		},
+	}
+	_, err := p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Create(ctx, sa, metav1.CreateOptions{})
+	if err != nil {
+		if _, getErr := p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Get(ctx, KWOKDeploymentName, metav1.GetOptions{}); getErr != nil {
+			return fmt.Errorf("creating KWOK service account: %w", err)
+		}
+	}
+	return nil
 }
 
 func (p *Provisioner) ensureRBAC(ctx context.Context) error {
-crb := &unstructured.Unstructured{
-Object: map[string]interface{}{
-"apiVersion": "rbac.authorization.k8s.io/v1",
-"kind":       "ClusterRoleBinding",
-"metadata": map[string]interface{}{
-"name": "kwok-controller",
-},
-"roleRef": map[string]interface{}{
-"apiGroup": "rbac.authorization.k8s.io",
-"kind":     "ClusterRole",
-"name":     "cluster-admin",
-},
-"subjects": []interface{}{
-map[string]interface{}{
-"kind":      "ServiceAccount",
-"name":      KWOKDeploymentName,
-"namespace": KWOKNamespace,
-},
-},
-},
-}
-_, err := p.dynClient.Resource(crbGVR).Create(ctx, crb, metav1.CreateOptions{})
-if err != nil {
-if _, getErr := p.dynClient.Resource(crbGVR).Get(ctx, "kwok-controller", metav1.GetOptions{}); getErr != nil {
-return fmt.Errorf("creating KWOK RBAC: %w", err)
-}
-}
-return nil
+	crb := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "rbac.authorization.k8s.io/v1",
+			"kind":       "ClusterRoleBinding",
+			"metadata": map[string]interface{}{
+				"name": "kwok-controller",
+			},
+			"roleRef": map[string]interface{}{
+				"apiGroup": "rbac.authorization.k8s.io",
+				"kind":     "ClusterRole",
+				"name":     "cluster-admin",
+			},
+			"subjects": []interface{}{
+				map[string]interface{}{
+					"kind":      "ServiceAccount",
+					"name":      KWOKDeploymentName,
+					"namespace": KWOKNamespace,
+				},
+			},
+		},
+	}
+	_, err := p.dynClient.Resource(crbGVR).Create(ctx, crb, metav1.CreateOptions{})
+	if err != nil {
+		if _, getErr := p.dynClient.Resource(crbGVR).Get(ctx, "kwok-controller", metav1.GetOptions{}); getErr != nil {
+			return fmt.Errorf("creating KWOK RBAC: %w", err)
+		}
+	}
+	return nil
 }
 
 // CreateFakeNodes provisions KWOK-managed fake nodes.
 func (p *Provisioner) CreateFakeNodes(ctx context.Context, count int) error {
-if count <= 0 {
-count = 1
-}
-logInfo(fmt.Sprintf("Creating %d KWOK fake node(s)...", count))
+	if count <= 0 {
+		count = 1
+	}
+	logInfo(fmt.Sprintf("Creating %d KWOK fake node(s)...", count))
 
-for i := 0; i < count; i++ {
-name := fmt.Sprintf("kwok-node-%s-%d", p.runID, i)
-if p.dryRun {
-logInfo(fmt.Sprintf("[DRY-RUN] Would create KWOK node %s", name))
-continue
-}
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("kwok-node-%s-%d", p.runID, i)
+		if p.dryRun {
+			logInfo(fmt.Sprintf("[DRY-RUN] Would create KWOK node %s", name))
+			continue
+		}
 
-node := &unstructured.Unstructured{
-Object: map[string]interface{}{
-"apiVersion": "v1",
-"kind":       "Node",
-"metadata": map[string]interface{}{
-"name": name,
-"annotations": map[string]interface{}{
-				"kwok.x-k8s.io/node": "fake",
+		node := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Node",
+				"metadata": map[string]interface{}{
+					"name": name,
+					"annotations": map[string]interface{}{
+						"kwok.x-k8s.io/node": "fake",
+					},
+					"labels": map[string]interface{}{
+						KWOKNodeLabel:                 KWOKNodeValue,
+						"app":                         resourcegen.AppLabel,
+						resourcegen.RunIDLabel:        p.runID,
+						resourcegen.ResourceTypeLabel: "kwok-node",
+						"kubernetes.io/hostname":      name,
+						"kubernetes.io/os":            "linux",
+						"kubernetes.io/arch":          "amd64",
+					},
+				},
+				"spec": map[string]interface{}{
+					"taints": []interface{}{
+						map[string]interface{}{
+							"key":    KWOKNodeLabel,
+							"value":  KWOKNodeValue,
+							"effect": "NoSchedule",
+						},
+					},
+				},
+				"status": map[string]interface{}{
+					"allocatable": map[string]interface{}{
+						"cpu":    "32",
+						"memory": "256Gi",
+						"pods":   "1000",
+					},
+					"capacity": map[string]interface{}{
+						"cpu":    "32",
+						"memory": "256Gi",
+						"pods":   "1000",
+					},
+					"conditions": []interface{}{
+						map[string]interface{}{
+							"type":               "Ready",
+							"status":             "True",
+							"reason":             "KWOKNodeReady",
+							"lastHeartbeatTime":  time.Now().UTC().Format(time.RFC3339),
+							"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+						},
+					},
+				},
 			},
-"labels": map[string]interface{}{
-KWOKNodeLabel:                 KWOKNodeValue,
-"app":                        resourcegen.AppLabel,
-resourcegen.RunIDLabel:        p.runID,
-resourcegen.ResourceTypeLabel: "kwok-node",
-"kubernetes.io/hostname":      name,
-"kubernetes.io/os":            "linux",
-"kubernetes.io/arch":          "amd64",
-},
-},
-"spec": map[string]interface{}{
-"taints": []interface{}{
-map[string]interface{}{
-"key":    KWOKNodeLabel,
-"value":  KWOKNodeValue,
-"effect": "NoSchedule",
-},
-},
-},
-"status": map[string]interface{}{
-"allocatable": map[string]interface{}{
-"cpu":    "32",
-"memory": "256Gi",
-"pods":   "1000",
-},
-"capacity": map[string]interface{}{
-"cpu":    "32",
-"memory": "256Gi",
-"pods":   "1000",
-},
-"conditions": []interface{}{
-map[string]interface{}{
-"type":               "Ready",
-"status":             "True",
-"reason":             "KWOKNodeReady",
-"lastHeartbeatTime":  time.Now().UTC().Format(time.RFC3339),
-"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
-},
-},
-},
-},
-}
+		}
 
-if _, err := p.dynClient.Resource(nodeGVR).Create(ctx, node, metav1.CreateOptions{}); err != nil {
-if _, getErr := p.dynClient.Resource(nodeGVR).Get(ctx, name, metav1.GetOptions{}); getErr != nil {
-return fmt.Errorf("creating KWOK node %s: %w", name, err)
-}
-}
-}
-logInfo("KWOK fake nodes ready")
-return nil
+		if _, err := p.dynClient.Resource(nodeGVR).Create(ctx, node, metav1.CreateOptions{}); err != nil {
+			if _, getErr := p.dynClient.Resource(nodeGVR).Get(ctx, name, metav1.GetOptions{}); getErr != nil {
+				return fmt.Errorf("creating KWOK node %s: %w", name, err)
+			}
+		}
+	}
+	logInfo("KWOK fake nodes ready")
+	return nil
 }
 
 // Cleanup removes KWOK fake nodes and optionally the controller.
 func (p *Provisioner) Cleanup(ctx context.Context, removeController bool) error {
-logInfo("Cleaning up KWOK fake nodes...")
+	logInfo("Cleaning up KWOK fake nodes...")
 
-labelSelector := fmt.Sprintf("%s=%s,app=%s", KWOKNodeLabel, KWOKNodeValue, resourcegen.AppLabel)
-if p.runID != "" {
-labelSelector += fmt.Sprintf(",%s=%s", resourcegen.RunIDLabel, p.runID)
-}
-
-list, err := p.dynClient.Resource(nodeGVR).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-if err != nil {
-return fmt.Errorf("listing KWOK nodes: %w", err)
-}
-
-for _, node := range list.Items {
-if p.dryRun {
-logInfo(fmt.Sprintf("[DRY-RUN] Would delete KWOK node %s", node.GetName()))
-continue
-}
-if err := p.dynClient.Resource(nodeGVR).Delete(ctx, node.GetName(), metav1.DeleteOptions{}); err != nil {
-logWarn(fmt.Sprintf("Failed deleting KWOK node %s: %v", node.GetName(), err))
-}
-}
-logInfo(fmt.Sprintf("Deleted %d KWOK node(s)", len(list.Items)))
-
-if removeController {
-	logInfo("Removing KWOK controller and stages...")
-	_ = p.dynClient.Resource(deployGVR).Namespace(KWOKNamespace).Delete(ctx, KWOKDeploymentName, metav1.DeleteOptions{})
-	_ = p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Delete(ctx, KWOKDeploymentName, metav1.DeleteOptions{})
-	_ = p.dynClient.Resource(crbGVR).Delete(ctx, "kwok-controller", metav1.DeleteOptions{})
-	for _, name := range []string{"node-initialize", "node-heartbeat-with-lease", "pod-ready", "pod-complete", "pod-delete"} {
-		_ = p.dynClient.Resource(stageGVR).Delete(ctx, name, metav1.DeleteOptions{})
+	labelSelector := fmt.Sprintf("%s=%s,app=%s", KWOKNodeLabel, KWOKNodeValue, resourcegen.AppLabel)
+	if p.runID != "" {
+		labelSelector += fmt.Sprintf(",%s=%s", resourcegen.RunIDLabel, p.runID)
 	}
-	_ = p.dynClient.Resource(crdGVR).Delete(ctx, "stages.kwok.x-k8s.io", metav1.DeleteOptions{})
-}
 
-return nil
+	list, err := p.dynClient.Resource(nodeGVR).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return fmt.Errorf("listing KWOK nodes: %w", err)
+	}
+
+	if p.dryRun {
+		logInfo(fmt.Sprintf("[DRY-RUN] Would delete %d KWOK nodes", len(list.Items)))
+	} else {
+		deleted := 0
+		for _, node := range list.Items {
+			if err := p.dynClient.Resource(nodeGVR).Delete(ctx, node.GetName(), metav1.DeleteOptions{}); err != nil {
+				logWarn(fmt.Sprintf("Failed deleting KWOK node %s: %v", node.GetName(), err))
+			}
+			deleted++
+			if deleted%100 == 0 || deleted == len(list.Items) {
+				logInfo(fmt.Sprintf("  %d/%d KWOK nodes deleted", deleted, len(list.Items)))
+			}
+		}
+	}
+
+	if removeController {
+		logInfo("Removing KWOK controller and stages...")
+		_ = p.dynClient.Resource(deployGVR).Namespace(KWOKNamespace).Delete(ctx, KWOKDeploymentName, metav1.DeleteOptions{})
+		_ = p.dynClient.Resource(saGVR).Namespace(KWOKNamespace).Delete(ctx, KWOKDeploymentName, metav1.DeleteOptions{})
+		_ = p.dynClient.Resource(crbGVR).Delete(ctx, "kwok-controller", metav1.DeleteOptions{})
+		for _, name := range []string{"node-initialize", "node-heartbeat-with-lease", "pod-ready", "pod-complete", "pod-delete"} {
+			_ = p.dynClient.Resource(stageGVR).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+		_ = p.dynClient.Resource(crdGVR).Delete(ctx, "stages.kwok.x-k8s.io", metav1.DeleteOptions{})
+	}
+
+	return nil
 }
 
 // NodesNeeded calculates the number of KWOK nodes needed for the given pod count.

@@ -115,3 +115,23 @@ func FrontendBuild() error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+const watchAgentImage = "k3sacr1.azurecr.io/watch-agent:latest"
+
+// WatchAgent builds and pushes the watch-agent container image
+func WatchAgent() error {
+	fmt.Println("==> Building watch-agent image 📡")
+	if err := run("docker", "build", "-f", "Dockerfile.watch-agent", "-t", watchAgentImage, "."); err != nil {
+		return err
+	}
+	fmt.Println("==> Logging in to ACR")
+	if err := run("az", "acr", "login", "--name", "k3sacr1"); err != nil {
+		return fmt.Errorf("ACR login failed (ensure 'az' CLI is installed and logged in): %w", err)
+	}
+	fmt.Println("==> Pushing watch-agent image 📡")
+	if err := run("docker", "push", watchAgentImage); err != nil {
+		return err
+	}
+	fmt.Printf("==> Published %s\n", watchAgentImage)
+	return nil
+}

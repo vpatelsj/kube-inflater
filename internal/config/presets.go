@@ -16,6 +16,13 @@ type Preset struct {
 	MaxBatches       int
 	SpreadNamespaces int
 	BatchPause       time.Duration
+
+	// Watch stress parameters (zero values = skip watch phase)
+	WatchConnections int
+	WatchStagger     time.Duration
+	WatchTypes       []string // resource types to watch (defaults to ["customresources"])
+	MutatorRate      int      // mutations per second
+	MutatorBatchSize int
 }
 
 // Presets maps short names to preset configurations.
@@ -33,6 +40,12 @@ var Presets = map[string]Preset{
 		MaxBatches:       25,
 		SpreadNamespaces: 10,
 		BatchPause:       2 * time.Second,
+
+		WatchConnections: 10_000,
+		WatchStagger:     30 * time.Second,
+		WatchTypes:       []string{"customresources"},
+		MutatorRate:      500,
+		MutatorBatchSize: 50,
 	},
 	"medium": {
 		Name:             "medium",
@@ -47,6 +60,12 @@ var Presets = map[string]Preset{
 		MaxBatches:       30,
 		SpreadNamespaces: 50,
 		BatchPause:       2 * time.Second,
+
+		WatchConnections: 50_000,
+		WatchStagger:     60 * time.Second,
+		WatchTypes:       []string{"customresources"},
+		MutatorRate:      2000,
+		MutatorBatchSize: 100,
 	},
 	"large": {
 		Name:             "large",
@@ -61,6 +80,12 @@ var Presets = map[string]Preset{
 		MaxBatches:       30,
 		SpreadNamespaces: 100,
 		BatchPause:       2 * time.Second,
+
+		WatchConnections: 100_000,
+		WatchStagger:     120 * time.Second,
+		WatchTypes:       []string{"customresources"},
+		MutatorRate:      5000,
+		MutatorBatchSize: 200,
 	},
 }
 
@@ -84,5 +109,11 @@ func (c *ResourceInflaterConfig) ApplyPreset(name string) bool {
 	c.MaxBatches = p.MaxBatches
 	c.SpreadNamespaces = p.SpreadNamespaces
 	c.BatchPause = p.BatchPause
+
+	c.WatchConnections = p.WatchConnections
+	c.WatchStagger = p.WatchStagger
+	c.WatchTypes = p.WatchTypes
+	c.MutatorRate = p.MutatorRate
+	c.MutatorBatchSize = p.MutatorBatchSize
 	return true
 }

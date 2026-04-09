@@ -32,7 +32,12 @@ func (w *Watcher) RunStandalone(ctx context.Context) (*Metrics, error) {
 	logInfo(fmt.Sprintf("Starting standalone watch stress: %d connections, stagger %v, duration %v", w.cfg.Connections, w.cfg.StaggerDuration, w.cfg.Duration))
 
 	metrics := &Metrics{StartTime: time.Now()}
-	ctx, cancel := context.WithTimeout(ctx, w.cfg.Duration)
+	var cancel context.CancelFunc
+	if w.cfg.Duration > 0 {
+		ctx, cancel = context.WithTimeout(ctx, w.cfg.Duration)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
 	var wg sync.WaitGroup

@@ -218,10 +218,15 @@ func (h *HollowNodeGenerator) Teardown(ctx context.Context, client kubernetes.In
 
 	// Delete hollow nodes
 	nodeNames, _, err := nodes.ListKubemarkNodes(ctx, client)
-	if err == nil {
+	if err == nil && len(nodeNames) > 0 {
+		logHollow("Deleting %d hollow nodes...", len(nodeNames))
+		deleted := 0
 		for _, name := range nodeNames {
-			logHollow("Deleting node %s", name)
 			_ = client.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{})
+			deleted++
+			if deleted%100 == 0 || deleted == len(nodeNames) {
+				logHollow("  %d/%d hollow nodes deleted", deleted, len(nodeNames))
+			}
 		}
 	}
 

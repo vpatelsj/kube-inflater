@@ -13,6 +13,8 @@ export interface PresetInfo {
   qps: number
   burst: number
   spreadNamespaces: number
+  watchConnections: number
+  mutatorRate: number
 }
 
 export async function fetchPresets(): Promise<PresetInfo[]> {
