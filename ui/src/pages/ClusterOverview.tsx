@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { subscribeToClusterOverview } from '../api/client'
 import type { ClusterSnapshot } from '../api/client'
+import ClusterResourcesChart from '../components/charts/ClusterResourcesChart'
 
 export default function ClusterOverview() {
   const [snapshot, setSnapshot] = useState<ClusterSnapshot | null>(null)
@@ -87,6 +88,9 @@ export default function ClusterOverview() {
               <Stat label="Namespaces" value={snapshot.clusterNamespaces.toLocaleString()} />
             </div>
           </div>
+
+          {/* Deployed resources chart */}
+          <ClusterResourcesChart snapshot={snapshot} />
         </div>
       )}
     </div>

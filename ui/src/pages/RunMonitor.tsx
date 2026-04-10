@@ -19,10 +19,11 @@ export default function RunMonitor() {
   const [reportID, setReportID] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<ClusterSnapshot[]>([])
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = useCallback(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = logContainerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [])
 
   // Load initial run data
@@ -121,7 +122,7 @@ export default function RunMonitor() {
       )}
 
       {/* Live log output */}
-      <div className="bg-gray-900 rounded-lg p-4 shadow-sm border border-gray-700 font-mono text-sm text-gray-100 overflow-auto max-h-[40vh] min-h-[150px]">
+      <div ref={logContainerRef} className="bg-gray-900 rounded-lg p-4 shadow-sm border border-gray-700 font-mono text-sm text-gray-100 overflow-auto max-h-[40vh] min-h-[150px]">
         {logLines.length === 0 && status === 'pending' && (
           <p className="text-gray-500">Waiting for output…</p>
         )}
@@ -137,7 +138,6 @@ export default function RunMonitor() {
             {line}
           </div>
         ))}
-        <div ref={logEndRef} />
       </div>
 
       {/* Actions */}
