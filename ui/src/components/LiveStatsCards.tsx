@@ -13,6 +13,7 @@ export default function LiveStatsCards({ snapshot }: Props) {
     { label: 'Running', value: snapshot.runningPods.toLocaleString(), color: 'text-green-600' },
     { label: 'Pending', value: snapshot.pendingPods.toLocaleString(), color: snapshot.pendingPods > 0 ? 'text-yellow-600' : '' },
     { label: 'Failed', value: snapshot.failedPods.toLocaleString(), color: snapshot.failedPods > 0 ? 'text-red-600' : '' },
+    { label: 'Watches', value: snapshot.watchConnections.toLocaleString(), color: 'text-sky-600' },
     { label: 'API Health', value: `${snapshot.apiHealthMs.toFixed(0)}ms`, color: snapshot.apiHealthMs > 500 ? 'text-red-600' : 'text-green-600' },
     { label: 'Elapsed', value: `${snapshot.elapsedSec.toFixed(0)}s` },
   ]
@@ -23,6 +24,9 @@ export default function LiveStatsCards({ snapshot }: Props) {
     { label: 'Secrets', run: snapshot.secrets, cluster: snapshot.clusterSecrets },
     { label: 'Services', run: snapshot.services, cluster: snapshot.clusterServices },
     { label: 'Jobs', run: snapshot.jobs, cluster: snapshot.clusterJobs },
+    { label: 'StatefulSets', run: snapshot.statefulsets, cluster: snapshot.clusterStatefulsets },
+    { label: 'ServiceAccounts', run: snapshot.serviceAccounts, cluster: snapshot.clusterServiceAccounts },
+    { label: 'CRs', run: snapshot.customResources, cluster: snapshot.clusterCustomResources },
     { label: 'Namespaces', run: snapshot.namespaces, cluster: snapshot.clusterNamespaces },
   ]
 

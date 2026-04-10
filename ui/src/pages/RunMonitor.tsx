@@ -5,6 +5,7 @@ import type { RunDetail, ClusterSnapshot } from '../api/client'
 import type { ReportType } from '../types/benchmark'
 import LiveStatsCards from '../components/LiveStatsCards'
 import LiveClusterChart from '../components/charts/LiveClusterChart'
+import ClusterResourcesChart from '../components/charts/ClusterResourcesChart'
 
 function reportRoute(type: string, id: string): string {
   return `/report/${type}/${id}`
@@ -181,8 +182,51 @@ export default function RunMonitor() {
       {/* Live cluster stats */}
       {(status === 'running' || snapshots.length > 0) && (
         <div className="space-y-4 mb-4">
-          <LiveStatsCards snapshot={latestSnapshot} />
-          <LiveClusterChart snapshots={snapshots} resourceTypes={[]} />
+          {isCleanup && latestSnapshot ? (
+            <>
+              <div className="bg-white rounded-lg p-4 shadow-sm border">
+                <h3 className="text-sm font-semibold text-gray-500 mb-3">Health & Nodes</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <CleanupStat
+                    label="API Health"
+                    value={`${latestSnapshot.apiHealthMs.toFixed(0)}ms`}
+                    color={latestSnapshot.apiHealthMs > 500 ? 'text-red-600' : 'text-green-600'}
+                  />
+                  <CleanupStat label="Nodes" value={`${latestSnapshot.readyNodes}/${latestSnapshot.totalNodes}`} sub="ready / total" />
+                  <CleanupStat label="Watches" value={latestSnapshot.watchConnections.toLocaleString()} color="text-sky-600" sub="active connections" />
+                  <CleanupStat label="Elapsed" value={`${latestSnapshot.elapsedSec.toFixed(0)}s`} />
+                </div>
+              </div>
+              <div className="bg-white rounded-lg p-4 shadow-sm border">
+                <h3 className="text-sm font-semibold text-gray-500 mb-3">Pods</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <CleanupStat label="Total" value={latestSnapshot.clusterPods.toLocaleString()} color="text-blue-600" />
+                  <CleanupStat label="Running" value={latestSnapshot.runningPods.toLocaleString()} color="text-green-600" />
+                  <CleanupStat label="Pending" value={latestSnapshot.pendingPods.toLocaleString()} color={latestSnapshot.pendingPods > 0 ? 'text-yellow-600' : ''} />
+                  <CleanupStat label="Failed" value={latestSnapshot.failedPods.toLocaleString()} color={latestSnapshot.failedPods > 0 ? 'text-red-600' : ''} />
+                </div>
+              </div>
+              <div className="bg-white rounded-lg p-4 shadow-sm border">
+                <h3 className="text-sm font-semibold text-gray-500 mb-3">Cluster Resources</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                  <CleanupStat label="ConfigMaps" value={latestSnapshot.clusterConfigmaps.toLocaleString()} />
+                  <CleanupStat label="Secrets" value={latestSnapshot.clusterSecrets.toLocaleString()} />
+                  <CleanupStat label="Services" value={latestSnapshot.clusterServices.toLocaleString()} />
+                  <CleanupStat label="Jobs" value={latestSnapshot.clusterJobs.toLocaleString()} />
+                  <CleanupStat label="StatefulSets" value={latestSnapshot.clusterStatefulsets.toLocaleString()} />
+                  <CleanupStat label="ServiceAccounts" value={latestSnapshot.clusterServiceAccounts.toLocaleString()} />
+                  <CleanupStat label="CRs" value={latestSnapshot.clusterCustomResources.toLocaleString()} />
+                  <CleanupStat label="Namespaces" value={latestSnapshot.clusterNamespaces.toLocaleString()} />
+                </div>
+              </div>
+              <ClusterResourcesChart snapshot={latestSnapshot} />
+            </>
+          ) : (
+            <>
+              <LiveStatsCards snapshot={latestSnapshot} />
+              <LiveClusterChart snapshots={snapshots} resourceTypes={[]} />
+            </>
+          )}
         </div>
       )}
 
@@ -227,6 +271,16 @@ export default function RunMonitor() {
           Start Another Run
         </Link>
       </div>
+    </div>
+  )
+}
+
+function CleanupStat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="text-center">
+      <div className={`text-2xl font-bold ${color ?? 'text-gray-800'}`}>{value}</div>
+      <div className="text-xs text-gray-500">{label}</div>
+      {sub && <div className="text-xs text-gray-400">{sub}</div>}
     </div>
   )
 }

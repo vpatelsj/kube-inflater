@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,12 +54,19 @@ func (s InflationSummary) Throughput() float64 {
 	return float64(s.TotalCreated) / s.TotalDuration.Seconds()
 }
 
+// sequentialTypes are resource types that must run one at a time (heavy or order-dependent).
+var sequentialTypes = map[string]bool{
+	"pods":        true,
+	"hollownodes": true,
+}
+
 // Engine orchestrates bulk resource creation with a worker pool.
 type Engine struct {
 	client    kubernetes.Interface
 	dynClient dynamic.Interface
 	cfg       *cfgpkg.ResourceInflaterConfig
 	Results   []InflationSummary
+	resultsMu sync.Mutex
 	// setupGens stores generators used for setup-based types (e.g. hollownodes)
 	// so that Verify() can access the correct DaemonSet name for label queries.
 	setupGens map[string]resourcegen.SetupTeardownGenerator
@@ -69,16 +77,46 @@ func NewEngine(client kubernetes.Interface, dynClient dynamic.Interface, cfg *cf
 	return &Engine{client: client, dynClient: dynClient, cfg: cfg}
 }
 
-// Run creates resources for all configured types using exponential batches.
+// Run creates resources for all configured types. Lightweight types (configmaps,
+// secrets, services, etc.) are inflated in parallel. Heavy types (pods, hollownodes)
+// run sequentially after the parallel group finishes.
 func (e *Engine) Run(ctx context.Context) error {
-	for _, typeName := range e.cfg.ResourceTypes {
+	var parallel, sequential []string
+	for _, t := range e.cfg.ResourceTypes {
+		if sequentialTypes[t] {
+			sequential = append(sequential, t)
+		} else {
+			parallel = append(parallel, t)
+		}
+	}
+
+	// Run parallel types concurrently.
+	if len(parallel) > 0 {
+		g, gctx := errgroup.WithContext(ctx)
+		for _, t := range parallel {
+			t := t
+			g.Go(func() error {
+				if err := e.inflateType(gctx, t); err != nil {
+					return fmt.Errorf("inflating %s: %w", t, err)
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return err
+		}
+	}
+
+	// Run sequential types one at a time.
+	for _, t := range sequential {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := e.inflateType(ctx, typeName); err != nil {
-			return fmt.Errorf("inflating %s: %w", typeName, err)
+		if err := e.inflateType(ctx, t); err != nil {
+			return fmt.Errorf("inflating %s: %w", t, err)
 		}
 	}
+
 	return nil
 }
 
@@ -152,7 +190,9 @@ func (e *Engine) inflateType(ctx context.Context, typeName string) error {
 	}
 
 	summary.TotalDuration = time.Since(runStart)
+	e.resultsMu.Lock()
 	e.Results = append(e.Results, summary)
+	e.resultsMu.Unlock()
 	logInfo(fmt.Sprintf("Completed inflating %s: %d created in %v (%.0f/sec)",
 		typeName, summary.TotalCreated, summary.TotalDuration.Round(time.Millisecond), summary.Throughput()))
 	return nil
@@ -189,7 +229,9 @@ func (e *Engine) inflateSetupType(ctx context.Context, gen resourcegen.SetupTear
 		TotalCreated:  int64(created),
 		TotalDuration: time.Since(runStart),
 	}
+	e.resultsMu.Lock()
 	e.Results = append(e.Results, summary)
+	e.resultsMu.Unlock()
 	logInfo(fmt.Sprintf("Completed inflating %s: %d in %v", typeName, created, summary.TotalDuration.Round(time.Millisecond)))
 	return nil
 }

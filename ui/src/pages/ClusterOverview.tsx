@@ -62,6 +62,7 @@ export default function ClusterOverview() {
                 color={snapshot.apiHealthMs > 500 ? 'text-red-600' : 'text-green-600'}
               />
               <Stat label="Nodes" value={`${snapshot.readyNodes}/${snapshot.totalNodes}`} sub="ready / total" />
+              <Stat label="Watches" value={snapshot.watchConnections.toLocaleString()} color="text-sky-600" sub="active connections" />
               <Stat label="Elapsed" value={`${snapshot.elapsedSec.toFixed(0)}s`} sub="since page load" />
             </div>
           </div>
@@ -85,6 +86,9 @@ export default function ClusterOverview() {
               <Stat label="Secrets" value={snapshot.clusterSecrets.toLocaleString()} />
               <Stat label="Services" value={snapshot.clusterServices.toLocaleString()} />
               <Stat label="Jobs" value={snapshot.clusterJobs.toLocaleString()} />
+              <Stat label="StatefulSets" value={snapshot.clusterStatefulsets.toLocaleString()} />
+              <Stat label="ServiceAccounts" value={snapshot.clusterServiceAccounts.toLocaleString()} />
+              <Stat label="CustomResources" value={snapshot.clusterCustomResources.toLocaleString()} />
               <Stat label="Namespaces" value={snapshot.clusterNamespaces.toLocaleString()} />
             </div>
           </div>

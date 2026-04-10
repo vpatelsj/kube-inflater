@@ -1,12 +1,17 @@
 package clustermon
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -14,34 +19,51 @@ import (
 
 // Snapshot captures a point-in-time view of cluster resources for a given run.
 type Snapshot struct {
-	Timestamp      time.Time      `json:"timestamp"`
-	ElapsedSec     float64        `json:"elapsedSec"`
-	TotalPods      int            `json:"totalPods"`
-	RunningPods    int            `json:"runningPods"`
-	PendingPods    int            `json:"pendingPods"`
-	FailedPods     int            `json:"failedPods"`
-	TotalNodes     int            `json:"totalNodes"`
-	ReadyNodes     int            `json:"readyNodes"`
-	Configmaps     int            `json:"configmaps"`
-	Secrets        int            `json:"secrets"`
-	Services       int            `json:"services"`
-	Jobs           int            `json:"jobs"`
-	Namespaces     int            `json:"namespaces"`
-	ResourceCounts map[string]int `json:"resourceCounts"`
-	APIHealthMs    float64        `json:"apiHealthMs"`
+	Timestamp       time.Time      `json:"timestamp"`
+	ElapsedSec      float64        `json:"elapsedSec"`
+	TotalPods       int            `json:"totalPods"`
+	RunningPods     int            `json:"runningPods"`
+	PendingPods     int            `json:"pendingPods"`
+	FailedPods      int            `json:"failedPods"`
+	TotalNodes      int            `json:"totalNodes"`
+	ReadyNodes      int            `json:"readyNodes"`
+	Configmaps      int            `json:"configmaps"`
+	Secrets         int            `json:"secrets"`
+	Services        int            `json:"services"`
+	Jobs            int            `json:"jobs"`
+	Namespaces      int            `json:"namespaces"`
+	ServiceAccounts int            `json:"serviceAccounts"`
+	StatefulSets    int            `json:"statefulsets"`
+	CustomResources int            `json:"customResources"`
+	ResourceCounts  map[string]int `json:"resourceCounts"`
+	APIHealthMs     float64        `json:"apiHealthMs"`
 
 	// Cluster-wide totals (unfiltered by run-id)
-	ClusterPods       int `json:"clusterPods"`
-	ClusterConfigmaps int `json:"clusterConfigmaps"`
-	ClusterSecrets    int `json:"clusterSecrets"`
-	ClusterServices   int `json:"clusterServices"`
-	ClusterJobs       int `json:"clusterJobs"`
-	ClusterNamespaces int `json:"clusterNamespaces"`
+	ClusterPods            int `json:"clusterPods"`
+	ClusterConfigmaps      int `json:"clusterConfigmaps"`
+	ClusterSecrets         int `json:"clusterSecrets"`
+	ClusterServices        int `json:"clusterServices"`
+	ClusterJobs            int `json:"clusterJobs"`
+	ClusterNamespaces      int `json:"clusterNamespaces"`
+	ClusterServiceAccounts int `json:"clusterServiceAccounts"`
+	ClusterStatefulSets    int `json:"clusterStatefulsets"`
+	ClusterCustomResources int `json:"clusterCustomResources"`
+
+	// Watch connections (from apiserver metrics)
+	WatchConnections int `json:"watchConnections"`
 }
 
 // Monitor polls the Kubernetes cluster for resource counts.
 type Monitor struct {
-	client kubernetes.Interface
+	client     kubernetes.Interface
+	dynClient  dynamic.Interface
+	restConfig *rest.Config
+}
+
+var stressItemGVR = schema.GroupVersionResource{
+	Group:    "stresstest.kube-inflater.io",
+	Version:  "v1alpha1",
+	Resource: "stressitems",
 }
 
 // New creates a Monitor, loading kubeconfig automatically.
@@ -58,7 +80,12 @@ func New() (*Monitor, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	return &Monitor{client: client}, nil
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("creating dynamic client: %w", err)
+	}
+
+	return &Monitor{client: client, dynClient: dynClient, restConfig: config}, nil
 }
 
 // TakeSnapshot queries the cluster and returns current resource counts.
@@ -238,6 +265,37 @@ func (m *Monitor) TakeSnapshot(ctx context.Context, runID string, startTime time
 		}
 	})
 
+	do(func() {
+		sas, err := m.client.CoreV1().ServiceAccounts("").List(apiCtx, cached(metav1.ListOptions{LabelSelector: labelSelector, Limit: 1}))
+		if err == nil {
+			mu.Lock()
+			snap.ServiceAccounts = countFromList(len(sas.Items), sas.RemainingItemCount)
+			snap.ResourceCounts["serviceaccounts"] = snap.ServiceAccounts
+			mu.Unlock()
+		}
+	})
+
+	do(func() {
+		sts, err := m.client.AppsV1().StatefulSets("").List(apiCtx, cached(metav1.ListOptions{LabelSelector: labelSelector, Limit: 1}))
+		if err == nil {
+			mu.Lock()
+			snap.StatefulSets = countFromList(len(sts.Items), sts.RemainingItemCount)
+			snap.ResourceCounts["statefulsets"] = snap.StatefulSets
+			mu.Unlock()
+		}
+	})
+
+	do(func() {
+		crs, err := m.dynClient.Resource(stressItemGVR).Namespace("").List(apiCtx, metav1.ListOptions{LabelSelector: labelSelector, ResourceVersion: "0", Limit: 1})
+		if err == nil {
+			remaining := crs.GetRemainingItemCount()
+			mu.Lock()
+			snap.CustomResources = countFromList(len(crs.Items), remaining)
+			snap.ResourceCounts["customresources"] = snap.CustomResources
+			mu.Unlock()
+		}
+	})
+
 	// --- Cluster-wide totals (Limit:1 + RemainingItemCount) ---
 
 	do(func() {
@@ -294,6 +352,42 @@ func (m *Monitor) TakeSnapshot(ctx context.Context, runID string, startTime time
 		}
 	})
 
+	do(func() {
+		all, err := m.client.CoreV1().ServiceAccounts("").List(apiCtx, cached(metav1.ListOptions{Limit: 1}))
+		if err == nil {
+			mu.Lock()
+			snap.ClusterServiceAccounts = countFromList(len(all.Items), all.RemainingItemCount)
+			mu.Unlock()
+		}
+	})
+
+	do(func() {
+		all, err := m.client.AppsV1().StatefulSets("").List(apiCtx, cached(metav1.ListOptions{Limit: 1}))
+		if err == nil {
+			mu.Lock()
+			snap.ClusterStatefulSets = countFromList(len(all.Items), all.RemainingItemCount)
+			mu.Unlock()
+		}
+	})
+
+	do(func() {
+		all, err := m.dynClient.Resource(stressItemGVR).Namespace("").List(apiCtx, metav1.ListOptions{ResourceVersion: "0", Limit: 1})
+		if err == nil {
+			remaining := all.GetRemainingItemCount()
+			mu.Lock()
+			snap.ClusterCustomResources = countFromList(len(all.Items), remaining)
+			mu.Unlock()
+		}
+	})
+
+	// Watch connections from apiserver metrics
+	do(func() {
+		count := m.scrapeWatchCount(apiCtx)
+		mu.Lock()
+		snap.WatchConnections = count
+		mu.Unlock()
+	})
+
 	wg.Wait()
 	return snap, nil
 }
@@ -309,4 +403,39 @@ func loadKubeConfig() (*rest.Config, error) {
 		clientcmd.NewDefaultClientConfigLoadingRules(),
 		&clientcmd.ConfigOverrides{},
 	).ClientConfig()
+}
+
+// scrapeWatchCount fetches /metrics from the apiserver and sums all
+// apiserver_longrunning_requests gauge values with verb="WATCH".
+func (m *Monitor) scrapeWatchCount(ctx context.Context) int {
+	client, err := kubernetes.NewForConfig(m.restConfig)
+	if err != nil {
+		return 0
+	}
+	body, err := client.RESTClient().Get().AbsPath("/metrics").DoRaw(ctx)
+	if err != nil {
+		return 0
+	}
+
+	total := 0
+	scanner := bufio.NewScanner(strings.NewReader(string(body)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "apiserver_longrunning_requests{") {
+			continue
+		}
+		if !strings.Contains(line, `verb="WATCH"`) {
+			continue
+		}
+		// Format: metric_name{labels} value
+		idx := strings.LastIndex(line, " ")
+		if idx < 0 {
+			continue
+		}
+		val, err := strconv.ParseFloat(strings.TrimSpace(line[idx+1:]), 64)
+		if err == nil {
+			total += int(val)
+		}
+	}
+	return total
 }

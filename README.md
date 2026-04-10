@@ -162,7 +162,7 @@ A single binary for all resource inflation. Select what to create with `--resour
 
 | Flag | Default | Description |
 |---|---|---|
-| `--kwok-nodes` | `10` | Number of KWOK fake nodes (auto-scales up for pod count) |
+| `--kwok-nodes` | `100` | Number of KWOK fake nodes (auto-scales up for pod count) |
 | `--kwok-cleanup-controller` | `false` | Also remove the KWOK controller on cleanup |
 
 KWOK nodes each advertise 32 vCPU, 256 GiB RAM, and 1000 pod slots. The controller image is `registry.k8s.io/kwok/kwok:v0.7.0`. Five KWOK Stages manage node and pod lifecycle: `node-initialize`, `node-heartbeat-with-lease`, `pod-ready`, `pod-complete`, `pod-delete`.

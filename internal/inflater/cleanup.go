@@ -441,11 +441,19 @@ func (c *Cleanup) forceDeleteNamespacedResources(ctx context.Context, labelSelec
 		return
 	}
 
-	// All namespaced resource types that may have been created
-	gvrs := []schema.GroupVersionResource{
-		{Group: "", Version: "v1", Resource: "pods"},
+	// Phase 1: Delete controller-managed resources (Jobs, StatefulSets) with
+	// PropagationOrphan so the controller objects are removed immediately and
+	// their owned Pods become orphans (cleaned up in phase 2). Without this,
+	// Job/StatefulSet objects linger with a deletionTimestamp while the GC
+	// waits for KWOK-scheduled pods to finalize, which can take a long time.
+	controllerGVRs := []schema.GroupVersionResource{
 		{Group: "batch", Version: "v1", Resource: "jobs"},
 		{Group: "apps", Version: "v1", Resource: "statefulsets"},
+	}
+
+	// Phase 2: Force-delete everything else (including orphaned pods from phase 1).
+	otherGVRs := []schema.GroupVersionResource{
+		{Group: "", Version: "v1", Resource: "pods"},
 		{Group: "", Version: "v1", Resource: "configmaps"},
 		{Group: "", Version: "v1", Resource: "secrets"},
 		{Group: "", Version: "v1", Resource: "services"},
@@ -454,54 +462,62 @@ func (c *Cleanup) forceDeleteNamespacedResources(ctx context.Context, labelSelec
 	}
 
 	grace := int64(0)
-	propagation := metav1.DeletePropagationBackground
+	orphan := metav1.DeletePropagationOrphan
+	background := metav1.DeletePropagationBackground
+	orphanOpts := metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+		PropagationPolicy:  &orphan,
+	}
 	forceOpts := metav1.DeleteOptions{
 		GracePeriodSeconds: &grace,
-		PropagationPolicy:  &propagation,
+		PropagationPolicy:  &background,
 	}
 	listOpts := metav1.ListOptions{LabelSelector: labelSelector}
 
 	var totalDeleted atomic.Int64
-	var wg sync.WaitGroup
 
-	workers := 10
-	if workers > len(nsList.Items) {
-		workers = len(nsList.Items)
-	}
-
-	work := make(chan string, len(nsList.Items))
-	for _, ns := range nsList.Items {
-		work <- ns.GetName()
-	}
-	close(work)
-
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for nsName := range work {
-				if ctx.Err() != nil {
-					return
-				}
-				for _, gvr := range gvrs {
-					if dryRun {
-						list, _ := c.dynClient.Resource(gvr).Namespace(nsName).List(ctx, listOpts)
-						if list != nil && len(list.Items) > 0 {
-							logInfo(fmt.Sprintf("[DRY-RUN] Would delete %d %s in %s", len(list.Items), gvr.Resource, nsName))
-							totalDeleted.Add(int64(len(list.Items)))
+	// Helper to run DeleteCollection across all namespaces for a set of GVRs.
+	deleteAcrossNamespaces := func(gvrs []schema.GroupVersionResource, opts metav1.DeleteOptions) {
+		var wg sync.WaitGroup
+		workers := 10
+		if workers > len(nsList.Items) {
+			workers = len(nsList.Items)
+		}
+		work := make(chan string, len(nsList.Items))
+		for _, ns := range nsList.Items {
+			work <- ns.GetName()
+		}
+		close(work)
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for nsName := range work {
+					if ctx.Err() != nil {
+						return
+					}
+					for _, gvr := range gvrs {
+						if dryRun {
+							list, _ := c.dynClient.Resource(gvr).Namespace(nsName).List(ctx, listOpts)
+							if list != nil && len(list.Items) > 0 {
+								logInfo(fmt.Sprintf("[DRY-RUN] Would delete %d %s in %s", len(list.Items), gvr.Resource, nsName))
+								totalDeleted.Add(int64(len(list.Items)))
+							}
+							continue
 						}
-						continue
-					}
-					err := c.dynClient.Resource(gvr).Namespace(nsName).DeleteCollection(ctx, forceOpts, listOpts)
-					if err != nil {
-						// CRD may not exist yet — ignore
-						continue
+						_ = c.dynClient.Resource(gvr).Namespace(nsName).DeleteCollection(ctx, opts, listOpts)
 					}
 				}
-			}
-		}()
+			}()
+		}
+		wg.Wait()
 	}
-	wg.Wait()
+
+	// Phase 1: orphan-delete Jobs and StatefulSets so their objects vanish immediately.
+	deleteAcrossNamespaces(controllerGVRs, orphanOpts)
+
+	// Phase 2: force-delete pods and all other resources.
+	deleteAcrossNamespaces(otherGVRs, forceOpts)
 
 	if dryRun {
 		logInfo(fmt.Sprintf("[DRY-RUN] Would force-delete %d resources total", totalDeleted.Load()))

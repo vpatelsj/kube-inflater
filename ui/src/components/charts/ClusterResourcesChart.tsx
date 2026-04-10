@@ -14,6 +14,10 @@ const COLORS = [
   'rgba(236, 72, 153, 0.7)',   // pink
   'rgba(20, 184, 166, 0.7)',   // teal
   'rgba(245, 158, 11, 0.7)',   // amber
+  'rgba(99, 102, 241, 0.7)',   // indigo
+  'rgba(239, 68, 68, 0.7)',    // red
+  'rgba(107, 114, 128, 0.7)',  // gray
+  'rgba(14, 165, 233, 0.7)',   // sky
 ]
 
 export default function ClusterResourcesChart({ snapshot }: Props) {
@@ -24,7 +28,11 @@ export default function ClusterResourcesChart({ snapshot }: Props) {
     { label: 'Secrets', value: snapshot.clusterSecrets },
     { label: 'Services', value: snapshot.clusterServices },
     { label: 'Jobs', value: snapshot.clusterJobs },
+    { label: 'StatefulSets', value: snapshot.clusterStatefulsets },
+    { label: 'ServiceAccounts', value: snapshot.clusterServiceAccounts },
+    { label: 'CustomResources', value: snapshot.clusterCustomResources },
     { label: 'Namespaces', value: snapshot.clusterNamespaces },
+    { label: 'Watches', value: snapshot.watchConnections },
   ]
 
   const data = {

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
 	"time"
 
@@ -329,6 +330,22 @@ func (h *HollowNodeGenerator) createKubeconfigSecret(ctx context.Context, client
 		return fmt.Errorf("loading kubeconfig: %w", err)
 	}
 
+	// Resolve CA data: prefer inline CAData, fall back to CAFile or in-cluster SA cert
+	caData := restConfig.CAData
+	if len(caData) == 0 && restConfig.CAFile != "" {
+		caData, err = os.ReadFile(restConfig.CAFile)
+		if err != nil {
+			return fmt.Errorf("reading CA file %s: %w", restConfig.CAFile, err)
+		}
+	}
+	if len(caData) == 0 {
+		// In-cluster: read the service account CA bundle
+		caData, err = os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+		if err != nil {
+			return fmt.Errorf("reading in-cluster CA: %w", err)
+		}
+	}
+
 	kubernetesService, err := client.CoreV1().Services("default").Get(ctx, "kubernetes", metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("getting kubernetes service: %w", err)
@@ -353,7 +370,7 @@ users:
   user:
     token: %s
 `,
-		base64.StdEncoding.EncodeToString(restConfig.CAData),
+		base64.StdEncoding.EncodeToString(caData),
 		serverHost,
 		tokenResponse.Status.Token)
 

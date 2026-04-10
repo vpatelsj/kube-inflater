@@ -15,7 +15,7 @@ const (
 	DefaultBatchPause       = 2 * time.Second
 
 	DefaultResourceNamespace = "stress-test"
-	DefaultKWOKNodes         = 10
+	DefaultKWOKNodes         = 100
 )
 
 // HollowNodeOpts configures the hollow node generator.

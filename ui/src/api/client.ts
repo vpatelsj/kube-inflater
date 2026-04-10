@@ -140,6 +140,9 @@ export interface ClusterSnapshot {
   services: number
   jobs: number
   namespaces: number
+  serviceAccounts: number
+  statefulsets: number
+  customResources: number
   resourceCounts: Record<string, number>
   apiHealthMs: number
   // Cluster-wide totals (unfiltered)
@@ -149,6 +152,11 @@ export interface ClusterSnapshot {
   clusterServices: number
   clusterJobs: number
   clusterNamespaces: number
+  clusterServiceAccounts: number
+  clusterStatefulsets: number
+  clusterCustomResources: number
+  // Watch connections (from apiserver metrics)
+  watchConnections: number
 }
 
 export function subscribeToCluster(
