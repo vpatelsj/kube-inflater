@@ -23,6 +23,11 @@ func run(name string, args ...string) error {
 	return cmd.Run()
 }
 
+func output(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
 // Tidy runs go mod tidy
 func Tidy() error {
 	fmt.Println("==> Tidying modules")
@@ -140,7 +145,7 @@ func WatchAgent() error {
 // BenchmarkUIImage builds and pushes the benchmark-ui container image
 func BenchmarkUIImage() error {
 	fmt.Println("==> Building benchmark-ui image 📊")
-	if err := run("docker", "build", "-f", "Dockerfile.benchmark-ui", "-t", benchmarkUIImage, "."); err != nil {
+	if err := run("docker", "build", "--no-cache", "-f", "Dockerfile.benchmark-ui", "-t", benchmarkUIImage, "."); err != nil {
 		return err
 	}
 	fmt.Println("==> Logging in to ACR")
@@ -170,8 +175,23 @@ func UI() error {
 	if err := run("kubectl", "-n", "benchmark-ui", "rollout", "restart", "deployment/benchmark-ui"); err != nil {
 		return err
 	}
-	if err := run("kubectl", "-n", "benchmark-ui", "rollout", "status", "deployment/benchmark-ui", "--timeout=120s"); err != nil {
-		return err
+	// Wait for rollout; if the scheduler is backlogged the pod may stay Pending.
+	// In that case, manually bind it to a control-plane node.
+	if err := run("kubectl", "-n", "benchmark-ui", "rollout", "status", "deployment/benchmark-ui", "--timeout=60s"); err != nil {
+		fmt.Println("==> Rollout timed out — attempting manual pod binding (scheduler may be backlogged)…")
+		if podName, e := output("kubectl", "-n", "benchmark-ui", "get", "pods", "--field-selector=status.phase=Pending", "-o", "jsonpath={.items[0].metadata.name}"); e == nil && podName != "" {
+			if node, e := output("kubectl", "get", "nodes", "-l", "node-role.kubernetes.io/control-plane=", "-o", "jsonpath={.items[0].metadata.name}"); e == nil && node != "" {
+				fmt.Printf("==> Binding pod %s to node %s\n", podName, node)
+				bindJSON := fmt.Sprintf(`{"apiVersion":"v1","kind":"Binding","metadata":{"name":"%s","namespace":"benchmark-ui"},"target":{"apiVersion":"v1","kind":"Node","name":"%s"}}`, podName, node)
+				cmd := exec.Command("kubectl", "create", "-f", "-")
+				cmd.Stdin = strings.NewReader(bindJSON)
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				_ = cmd.Run()
+			}
+		}
+		// Wait for the pod to become ready
+		_ = run("kubectl", "-n", "benchmark-ui", "wait", "--for=condition=ready", "pod", "-l", "app=benchmark-ui", "--timeout=120s")
 	}
 	fmt.Println("==> benchmark-ui deployed ✅")
 	// Print the access info

@@ -99,6 +99,17 @@ export async function startRun(type: string, config: RunConfig): Promise<{ id: s
   return res.json()
 }
 
+export async function deleteAllRuns(): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE}/runs`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Failed to delete runs: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteRun(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/runs/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Failed to delete run: ${res.statusText}`)
+}
+
 export function subscribeToRun(
   runId: string,
   onLog: (line: string) => void,

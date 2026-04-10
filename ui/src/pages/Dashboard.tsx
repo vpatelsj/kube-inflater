@@ -1,14 +1,15 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useReports } from '../hooks/useBenchmarkData'
 import { useEffect, useState } from 'react'
-import { fetchRuns } from '../api/client'
+import { fetchRuns, deleteAllRuns, startRun } from '../api/client'
 import type { RunSummary } from '../api/client'
 import type { ReportType } from '../types/benchmark'
 
-const typeBadge: Record<ReportType, { label: string; color: string }> = {
+const typeBadge: Record<string, { label: string; color: string }> = {
   'resource-creation': { label: 'Resource Creation', color: 'bg-blue-100 text-blue-800' },
   'watch-stress': { label: 'Watch Stress', color: 'bg-purple-100 text-purple-800' },
   'api-latency': { label: 'API Latency', color: 'bg-green-100 text-green-800' },
+  'cleanup': { label: 'Cleanup', color: 'bg-orange-100 text-orange-800' },
 }
 
 
@@ -26,6 +27,7 @@ function reportRoute(type: ReportType, id: string): string {
 export default function Dashboard() {
   const { reports, loading, error } = useReports()
   const [runs, setRuns] = useState<RunSummary[]>([])
+  const navigate = useNavigate()
 
   useEffect(() => {
     fetchRuns().then(setRuns).catch(() => {})
@@ -57,16 +59,50 @@ export default function Dashboard() {
     )
   }
 
+  const hasFinishedRuns = runs.some((r) => r.status === 'completed' || r.status === 'failed')
+
+  const handleClearRuns = async () => {
+    if (!confirm('Delete all completed and failed runs?')) return
+    await deleteAllRuns()
+    fetchRuns().then(setRuns).catch(() => {})
+  }
+
+  const handleCleanupAll = async () => {
+    if (!confirm('Nuclear cleanup: delete ALL kube-inflater resources from the cluster and clear run history?')) return
+    try {
+      const { id } = await startRun('cleanup', {})
+      navigate(`/run/${id}`)
+    } catch (e) {
+      alert(`Failed to start cleanup: ${e}`)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Benchmark Runs</h1>
-        <Link
-          to="/new-run"
-          className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
-        >
-          🚀 New Run
-        </Link>
+        <div className="flex gap-2">
+          <button
+            onClick={handleCleanupAll}
+            className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 transition-colors"
+          >
+            ☢️ Clean All
+          </button>
+          {hasFinishedRuns && (
+            <button
+              onClick={handleClearRuns}
+              className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+            >
+              🗑 Clear Runs
+            </button>
+          )}
+          <Link
+            to="/new-run"
+            className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
+          >
+            🚀 New Run
+          </Link>
+        </div>
       </div>
 
       {/* Active runs */}

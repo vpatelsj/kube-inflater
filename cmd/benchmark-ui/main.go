@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"kube-inflater/internal/benchmarkio"
@@ -38,6 +39,7 @@ type Run struct {
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	startTime time.Time
+	snapshots []*clustermon.Snapshot // historical cluster snapshots for chart replay
 }
 
 // RunConfig is the user-submitted configuration for a new run.
@@ -160,6 +162,54 @@ func (rm *RunManager) ListRuns() []*Run {
 	return result
 }
 
+// DeleteRun removes a single non-running run from memory and the store.
+func (rm *RunManager) DeleteRun(id string) bool {
+	rm.mu.Lock()
+	run, ok := rm.runs[id]
+	if !ok {
+		rm.mu.Unlock()
+		return false
+	}
+	run.mu.Lock()
+	if run.Status == "running" || run.Status == "pending" {
+		run.mu.Unlock()
+		rm.mu.Unlock()
+		return false
+	}
+	run.mu.Unlock()
+	delete(rm.runs, id)
+	rm.mu.Unlock()
+
+	if rm.store != nil {
+		rm.store.Delete(id)
+	}
+	return true
+}
+
+// DeleteAllRuns removes all completed/failed runs from memory and the store.
+// Returns the number of runs deleted.
+func (rm *RunManager) DeleteAllRuns() int {
+	rm.mu.Lock()
+	var toDelete []string
+	for id, run := range rm.runs {
+		run.mu.Lock()
+		active := run.Status == "running" || run.Status == "pending"
+		run.mu.Unlock()
+		if !active {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(rm.runs, id)
+	}
+	rm.mu.Unlock()
+
+	if rm.store != nil {
+		rm.store.DeleteAll()
+	}
+	return len(toDelete)
+}
+
 func (rm *RunManager) executeRun(run *Run) {
 	run.mu.Lock()
 	run.Status = "running"
@@ -179,6 +229,9 @@ func (rm *RunManager) executeRun(run *Run) {
 	case "watch-stress":
 		binary = filepath.Join(rm.binDir, "watch-agent")
 		args = rm.buildWatchAgentArgs(run.Config)
+	case "cleanup":
+		binary = filepath.Join(rm.binDir, "kube-inflater")
+		args = []string{"--cleanup-all"}
 	default:
 		rm.failRun(run, fmt.Sprintf("unknown run type: %s", run.Type))
 		return
@@ -193,7 +246,8 @@ func (rm *RunManager) executeRun(run *Run) {
 	rm.appendLog(run, fmt.Sprintf("$ %s %s", filepath.Base(binary), strings.Join(args, " ")))
 
 	cmd := exec.Command(binary, args...)
-	cmd.Dir = filepath.Dir(rm.binDir) // repo root
+	cmd.Dir = filepath.Dir(rm.binDir)                     // repo root
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own process group — survives parent signals
 
 	run.mu.Lock()
 	run.cmd = cmd
@@ -248,11 +302,42 @@ func (rm *RunManager) executeRun(run *Run) {
 	} else {
 		run.Status = "completed"
 		rm.appendLogLocked(run, "✅ Run completed successfully")
-		// Find the report that was just created
-		run.ReportID = rm.findLatestReport(run.Type)
+		if run.Type != "cleanup" {
+			// Find the report that was just created
+			run.ReportID = rm.findLatestReport(run.Type)
+		}
 	}
 	run.mu.Unlock()
 	rm.persistRun(run)
+
+	// After successful cleanup, clear all other finished runs
+	if run.Type == "cleanup" && err == nil {
+		rm.appendLog(run, "🧹 Clearing finished run records...")
+		rm.mu.Lock()
+		var toDelete []string
+		for id, r := range rm.runs {
+			if id == run.ID {
+				continue
+			}
+			r.mu.Lock()
+			active := r.Status == "running" || r.Status == "pending"
+			r.mu.Unlock()
+			if !active {
+				toDelete = append(toDelete, id)
+			}
+		}
+		for _, id := range toDelete {
+			delete(rm.runs, id)
+		}
+		rm.mu.Unlock()
+		if rm.store != nil {
+			for _, id := range toDelete {
+				rm.store.Delete(id)
+			}
+		}
+		rm.appendLog(run, fmt.Sprintf("🧹 Cleared %d run records", len(toDelete)))
+		rm.persistRun(run)
+	}
 }
 
 func (rm *RunManager) buildResourceInflaterArgs(cfg RunConfig) []string {
@@ -525,6 +610,12 @@ func handleRuns(rm *RunManager) http.HandlerFunc {
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(map[string]string{"id": run.ID})
 
+		case http.MethodDelete:
+			// Delete all completed/failed runs
+			deleted := rm.DeleteAllRuns()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -533,11 +624,6 @@ func handleRuns(rm *RunManager) http.HandlerFunc {
 
 func handleGetRun(rm *RunManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
 		id := strings.TrimPrefix(r.URL.Path, "/api/runs/")
 		// Skip sub-paths like /api/runs/events/...
 		if strings.Contains(id, "/") {
@@ -548,16 +634,30 @@ func handleGetRun(rm *RunManager) http.HandlerFunc {
 			return
 		}
 
-		run := rm.GetRun(id)
-		if run == nil {
-			http.Error(w, "run not found", http.StatusNotFound)
-			return
-		}
+		switch r.Method {
+		case http.MethodGet:
+			run := rm.GetRun(id)
+			if run == nil {
+				http.Error(w, "run not found", http.StatusNotFound)
+				return
+			}
 
-		run.mu.Lock()
-		defer run.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(run)
+			run.mu.Lock()
+			defer run.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(run)
+
+		case http.MethodDelete:
+			if !rm.DeleteRun(id) {
+				http.Error(w, "run not found or still active", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"deleted": id})
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -653,6 +753,17 @@ func handleClusterLiveSSE(rm *RunManager, monitor *clustermon.Monitor) http.Hand
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
+		// Replay historical snapshots so chart doesn't start from scratch
+		run.mu.Lock()
+		history := make([]*clustermon.Snapshot, len(run.snapshots))
+		copy(history, run.snapshots)
+		run.mu.Unlock()
+		for _, snap := range history {
+			snapJSON, _ := json.Marshal(snap)
+			fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapJSON)
+		}
+		flusher.Flush()
+
 		pollInterval := 2 * time.Second
 		ctx := r.Context()
 
@@ -672,6 +783,10 @@ func handleClusterLiveSSE(rm *RunManager, monitor *clustermon.Monitor) http.Hand
 				errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
 				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
 			} else {
+				// Store snapshot for replay on reconnect
+				run.mu.Lock()
+				run.snapshots = append(run.snapshots, snap)
+				run.mu.Unlock()
 				snapJSON, _ := json.Marshal(snap)
 				fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapJSON)
 			}

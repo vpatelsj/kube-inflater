@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { fetchRun, subscribeToRun, subscribeToCluster } from '../api/client'
 import type { RunDetail, ClusterSnapshot } from '../api/client'
@@ -8,6 +8,33 @@ import LiveClusterChart from '../components/charts/LiveClusterChart'
 
 function reportRoute(type: string, id: string): string {
   return `/report/${type}/${id}`
+}
+
+// Cleanup step markers matched against log lines
+const CLEANUP_STEPS = [
+  { marker: 'Starting full cleanup', label: 'Starting cleanup' },
+  { marker: 'Cleaning up hollow node', label: 'Hollow nodes' },
+  { marker: 'kubemark nodes', label: 'Kubemark nodes' },
+  { marker: 'Cleaning up KWOK', label: 'KWOK infrastructure' },
+  { marker: 'kube-inflater namespaces', label: 'Namespaces' },
+  { marker: 'Cleaning up watch-agent', label: 'Watch agent' },
+  { marker: 'CRD', label: 'CRD' },
+  { marker: 'Full cleanup completed', label: 'Done' },
+] as const
+
+function useCleanupProgress(logLines: string[], isCleanup: boolean) {
+  return useMemo(() => {
+    if (!isCleanup) return null
+    let completedSteps = 0
+    for (const step of CLEANUP_STEPS) {
+      if (logLines.some((line) => line.includes(step.marker))) {
+        completedSteps++
+      } else {
+        break
+      }
+    }
+    return { completedSteps, totalSteps: CLEANUP_STEPS.length, steps: CLEANUP_STEPS }
+  }, [logLines, isCleanup])
 }
 
 export default function RunMonitor() {
@@ -97,6 +124,8 @@ export default function RunMonitor() {
   }
 
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1]! : null
+  const isCleanup = run?.type === 'cleanup'
+  const cleanupProgress = useCleanupProgress(logLines, isCleanup)
 
   return (
     <div>
@@ -112,6 +141,42 @@ export default function RunMonitor() {
           </span>
         )}
       </div>
+
+      {/* Cleanup progress bar */}
+      {cleanupProgress && (
+        <div className="mb-4 bg-white rounded-lg shadow-sm border p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-semibold text-gray-700">Cleanup Progress</span>
+            <span className="text-xs text-gray-500">
+              {cleanupProgress.completedSteps} / {cleanupProgress.totalSteps} steps
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
+            <div
+              className="bg-orange-500 h-3 rounded-full transition-all duration-500"
+              style={{ width: `${(cleanupProgress.completedSteps / cleanupProgress.totalSteps) * 100}%` }}
+            />
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {cleanupProgress.steps.map((step, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs">
+                <span className={
+                  i < cleanupProgress.completedSteps
+                    ? 'text-green-600'
+                    : i === cleanupProgress.completedSteps && status === 'running'
+                    ? 'text-orange-500 animate-pulse'
+                    : 'text-gray-400'
+                }>
+                  {i < cleanupProgress.completedSteps ? '✓' : i === cleanupProgress.completedSteps && status === 'running' ? '●' : '○'}
+                </span>
+                <span className={i < cleanupProgress.completedSteps ? 'text-gray-700' : 'text-gray-400'}>
+                  {step.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Live cluster stats */}
       {(status === 'running' || snapshots.length > 0) && (

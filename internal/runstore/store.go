@@ -176,6 +176,29 @@ func (s *Store) Delete(runID string) error {
 	return err
 }
 
+// DeleteAll removes all run ConfigMaps from the store.
+func (s *Store) DeleteAll() (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	list, err := s.client.CoreV1().ConfigMaps(Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + labelApp,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list runs for deletion: %w", err)
+	}
+
+	deleted := 0
+	for _, cm := range list.Items {
+		if err := s.client.CoreV1().ConfigMaps(Namespace).Delete(ctx, cm.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+			log.Printf("runstore: failed to delete ConfigMap %s: %v", cm.Name, err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 func loadKubeConfig() (*rest.Config, error) {
 	cfg, err := rest.InClusterConfig()
 	if err == nil {
