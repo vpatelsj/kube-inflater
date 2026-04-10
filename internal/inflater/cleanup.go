@@ -308,19 +308,26 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 		}
 	}
 
-	// 3. Delete ALL KWOK fake nodes and controller/stages
+	// 3. Force-delete all labeled namespaced resources BEFORE removing KWOK.
+	//    Once the KWOK controller is gone there is no simulated kubelet to ACK
+	//    pod terminations, so pods get stuck in Terminating and block namespace
+	//    deletion indefinitely.
+	appLabel := fmt.Sprintf("app=%s", resourcegen.AppLabel)
+	logInfo("Force-deleting labeled resources across all namespaces...")
+	c.forceDeleteNamespacedResources(ctx, appLabel, dryRun)
+
+	// 4. Delete ALL KWOK fake nodes and controller/stages
 	logInfo("Cleaning up KWOK infrastructure...")
 	prov := kwok.NewProvisioner(c.client, c.dynClient, "", dryRun)
 	if err := prov.Cleanup(ctx, true); err != nil {
 		logWarn(fmt.Sprintf("KWOK cleanup: %v", err))
 	}
 
-	// 4. Delete all labeled namespaces (spread + any others) with cascading deletion
-	appLabel := fmt.Sprintf("app=%s", resourcegen.AppLabel)
+	// 5. Delete all labeled namespaces (spread + any others) with cascading deletion
 	logInfo("Deleting all kube-inflater namespaces...")
 	deleted := c.deleteNamespacesByLabel(ctx, appLabel, dryRun)
 
-	// 5. Delete hollow node namespace
+	// 6. Delete hollow node namespace
 	hollowNS := cfgpkg.DefaultNamespace
 	if c.cfg.HollowNodeOpts != nil && c.cfg.HollowNodeOpts.Namespace != "" {
 		hollowNS = c.cfg.HollowNodeOpts.Namespace
@@ -329,14 +336,14 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 		_ = c.client.CoreV1().Namespaces().Delete(ctx, hollowNS, metav1.DeleteOptions{})
 	}
 
-	// 6. Delete watch-agent resources (Jobs, ConfigMaps, RBAC, FlowSchema, namespace)
+	// 7. Delete watch-agent resources (Jobs, ConfigMaps, RBAC, FlowSchema, namespace)
 	logInfo("Cleaning up watch-agent resources...")
 	wd := watchdeploy.NewDeployer(c.client, watchdeploy.Config{DryRun: dryRun})
 	if err := wd.Cleanup(ctx); err != nil {
 		logWarn(fmt.Sprintf("Watch-agent cleanup: %v", err))
 	}
 
-	// 7. Delete CRD (StressItem)
+	// 8. Delete CRD (StressItem)
 	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	crdName := fmt.Sprintf("%s.%s", resourcegen.CRDPlural, resourcegen.CRDGroup)
 	if dryRun {
@@ -347,7 +354,7 @@ func (c *Cleanup) RunAll(ctx context.Context) error {
 		}
 	}
 
-	// 8. Wait for namespaces to finish terminating
+	// 9. Wait for namespaces to finish terminating
 	if !dryRun && deleted > 0 {
 		c.waitForNamespaceDeletion(ctx, appLabel)
 	}
@@ -416,4 +423,104 @@ func (c *Cleanup) waitForNamespaceDeletion(ctx context.Context, labelSelector st
 		time.Sleep(3 * time.Second)
 	}
 	logWarn("Timed out waiting for namespace deletion (namespaces may still be terminating)")
+}
+
+// forceDeleteNamespacedResources uses DeleteCollection with GracePeriodSeconds=0
+// to remove all labeled resources from every spread namespace. This must run
+// BEFORE the KWOK controller is removed so that pods on fake nodes don't get
+// stuck in Terminating (no simulated kubelet to acknowledge the deletion).
+func (c *Cleanup) forceDeleteNamespacedResources(ctx context.Context, labelSelector string, dryRun bool) {
+	// Discover our spread namespaces
+	nsSelector := fmt.Sprintf("app=%s,%s=spread-namespace", resourcegen.AppLabel, resourcegen.ResourceTypeLabel)
+	nsList, err := c.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: nsSelector})
+	if err != nil {
+		logWarn(fmt.Sprintf("Error listing spread namespaces for resource cleanup: %v", err))
+		return
+	}
+	if len(nsList.Items) == 0 {
+		return
+	}
+
+	// All namespaced resource types that may have been created
+	gvrs := []schema.GroupVersionResource{
+		{Group: "", Version: "v1", Resource: "pods"},
+		{Group: "batch", Version: "v1", Resource: "jobs"},
+		{Group: "apps", Version: "v1", Resource: "statefulsets"},
+		{Group: "", Version: "v1", Resource: "configmaps"},
+		{Group: "", Version: "v1", Resource: "secrets"},
+		{Group: "", Version: "v1", Resource: "services"},
+		{Group: "", Version: "v1", Resource: "serviceaccounts"},
+		{Group: resourcegen.CRDGroup, Version: "v1alpha1", Resource: resourcegen.CRDPlural},
+	}
+
+	grace := int64(0)
+	propagation := metav1.DeletePropagationBackground
+	forceOpts := metav1.DeleteOptions{
+		GracePeriodSeconds: &grace,
+		PropagationPolicy:  &propagation,
+	}
+	listOpts := metav1.ListOptions{LabelSelector: labelSelector}
+
+	var totalDeleted atomic.Int64
+	var wg sync.WaitGroup
+
+	workers := 10
+	if workers > len(nsList.Items) {
+		workers = len(nsList.Items)
+	}
+
+	work := make(chan string, len(nsList.Items))
+	for _, ns := range nsList.Items {
+		work <- ns.GetName()
+	}
+	close(work)
+
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for nsName := range work {
+				if ctx.Err() != nil {
+					return
+				}
+				for _, gvr := range gvrs {
+					if dryRun {
+						list, _ := c.dynClient.Resource(gvr).Namespace(nsName).List(ctx, listOpts)
+						if list != nil && len(list.Items) > 0 {
+							logInfo(fmt.Sprintf("[DRY-RUN] Would delete %d %s in %s", len(list.Items), gvr.Resource, nsName))
+							totalDeleted.Add(int64(len(list.Items)))
+						}
+						continue
+					}
+					err := c.dynClient.Resource(gvr).Namespace(nsName).DeleteCollection(ctx, forceOpts, listOpts)
+					if err != nil {
+						// CRD may not exist yet — ignore
+						continue
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if dryRun {
+		logInfo(fmt.Sprintf("[DRY-RUN] Would force-delete %d resources total", totalDeleted.Load()))
+		return
+	}
+
+	// Wait briefly for deletions to propagate, then count remaining pods
+	time.Sleep(2 * time.Second)
+	var remaining int
+	for _, ns := range nsList.Items {
+		list, err := c.dynClient.Resource(schema.GroupVersionResource{Version: "v1", Resource: "pods"}).
+			Namespace(ns.GetName()).List(ctx, listOpts)
+		if err == nil {
+			remaining += len(list.Items)
+		}
+	}
+	if remaining > 0 {
+		logInfo(fmt.Sprintf("Force-deleted resources across %d namespaces (%d pods still terminating)", len(nsList.Items), remaining))
+	} else {
+		logInfo(fmt.Sprintf("Force-deleted resources across %d namespaces", len(nsList.Items)))
+	}
 }
