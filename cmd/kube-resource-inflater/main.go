@@ -398,6 +398,13 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 
 	flag.Parse()
 
+	// Save explicitly-set flag values BEFORE ApplyPreset overwrites them.
+	// flag.IntVar writes directly to cfg.*, so the preset clobbers those values.
+	explicitFlags := make(map[string]string)
+	flag.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = f.Value.String()
+	})
+
 	// Apply preset first — individual flags override preset values
 	if presetName != "" {
 		if !cfg.ApplyPreset(presetName) {
@@ -410,45 +417,13 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 		qps = float64(cfg.QPS)
 	}
 
-	// Apply explicitly-set flags on top of preset
-	flag.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "resource-types":
-			cfg.ResourceTypes = parseCSV(resourceTypesCSV)
-		case "count":
-			// already written to cfg by flag package
-		case "workers":
-			// already written
-		case "qps":
-			// will be applied below
-		case "burst":
-			// already written
-		case "batch-initial":
-			// already written
-		case "batch-factor":
-			// already written
-		case "max-batches":
-			// already written
-		case "spread-namespaces":
-			// already written
-		case "batch-pause":
-			// handled below
-		case "watch-connections":
-			// already written
-		case "watch-duration":
-			// handled below
-		case "watch-stagger":
-			// handled below
-		case "watch-types":
-			cfg.WatchTypes = parseCSV(watchTypesCSV)
-		case "mutator-rate":
-			// already written
-		case "mutator-duration":
-			// handled below
-		case "mutator-batch-size":
-			// already written
+	// Re-apply explicitly-set flags on top of preset
+	for name, val := range explicitFlags {
+		f := flag.Lookup(name)
+		if f != nil {
+			_ = f.Value.Set(val)
 		}
-	})
+	}
 
 	cfg.BatchPause = time.Duration(batchPauseSec) * time.Second
 	cfg.QPS = float32(qps)
@@ -465,15 +440,18 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	} else if cfg.MutatorDuration == 0 && cfg.WatchDuration > 0 {
 		cfg.MutatorDuration = cfg.WatchDuration
 	}
-	if len(cfg.WatchTypes) == 0 && watchTypesCSV != "" {
-		cfg.WatchTypes = parseCSV(watchTypesCSV)
+	// Parse resource types: use explicit flag if set, otherwise keep preset value
+	if _, ok := explicitFlags["resource-types"]; ok {
+		cfg.ResourceTypes = parseCSV(resourceTypesCSV)
+	} else if presetName == "" && resourceTypesCSV != "" {
+		cfg.ResourceTypes = parseCSV(resourceTypesCSV)
 	}
 
-	// Parse resource types (only if preset was NOT used and flag was not explicitly set)
-	if presetName == "" {
-		if resourceTypesCSV != "" {
-			cfg.ResourceTypes = parseCSV(resourceTypesCSV)
-		}
+	// Parse watch types
+	if _, ok := explicitFlags["watch-types"]; ok {
+		cfg.WatchTypes = parseCSV(watchTypesCSV)
+	} else if len(cfg.WatchTypes) == 0 && watchTypesCSV != "" {
+		cfg.WatchTypes = parseCSV(watchTypesCSV)
 	}
 
 	// Validate resource types

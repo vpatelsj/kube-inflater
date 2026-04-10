@@ -186,6 +186,43 @@ func (rm *RunManager) DeleteRun(id string) bool {
 	return true
 }
 
+// StopRun sends SIGTERM to the process group of a running run, then SIGKILL
+// after a short grace period to ensure the process exits promptly.
+func (rm *RunManager) StopRun(id string) (bool, string) {
+	rm.mu.RLock()
+	run, ok := rm.runs[id]
+	rm.mu.RUnlock()
+	if !ok {
+		return false, "run not found"
+	}
+
+	run.mu.Lock()
+	if run.Status != "running" {
+		run.mu.Unlock()
+		return false, "run is not running"
+	}
+	if run.cmd == nil || run.cmd.Process == nil {
+		run.mu.Unlock()
+		return false, "no process to stop"
+	}
+	pid := run.cmd.Process.Pid
+	run.mu.Unlock()
+
+	// Send SIGTERM for graceful shutdown, then SIGKILL after 3s.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	go func() {
+		time.Sleep(3 * time.Second)
+		// If still running, force kill.
+		run.mu.Lock()
+		stillRunning := run.Status == "running"
+		run.mu.Unlock()
+		if stillRunning {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}()
+	return true, ""
+}
+
 // DeleteAllRuns removes all completed/failed runs from memory and the store.
 // Returns the number of runs deleted.
 func (rm *RunManager) DeleteAllRuns() int {
@@ -296,9 +333,16 @@ func (rm *RunManager) executeRun(run *Run) {
 	run.mu.Lock()
 	run.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	if err != nil {
-		run.Status = "failed"
-		run.Error = err.Error()
-		rm.appendLogLocked(run, fmt.Sprintf("❌ Process exited with error: %v", err))
+		// Check if this was a user-initiated stop (signal: terminated)
+		if strings.Contains(err.Error(), "signal") {
+			run.Status = "failed"
+			run.Error = "stopped by user"
+			rm.appendLogLocked(run, "⏹ Run stopped by user")
+		} else {
+			run.Status = "failed"
+			run.Error = err.Error()
+			rm.appendLogLocked(run, fmt.Sprintf("❌ Process exited with error: %v", err))
+		}
 	} else {
 		run.Status = "completed"
 		rm.appendLogLocked(run, "✅ Run completed successfully")
@@ -524,8 +568,9 @@ func main() {
 
 	// Run management API
 	mux.HandleFunc("/api/runs", corsMiddleware(handleRuns(runMgr)))
-	mux.HandleFunc("/api/runs/", corsMiddleware(handleGetRun(runMgr)))
+	mux.HandleFunc("/api/runs/stop/", corsMiddleware(handleStopRun(runMgr)))
 	mux.HandleFunc("/api/runs/events/", corsMiddleware(handleRunSSE(runMgr)))
+	mux.HandleFunc("/api/runs/", corsMiddleware(handleGetRun(runMgr)))
 
 	// Live cluster monitoring SSE
 	mux.HandleFunc("/api/cluster/live/", corsMiddleware(handleClusterLiveSSE(runMgr, monitor)))
@@ -658,6 +703,27 @@ func handleGetRun(rm *RunManager) http.HandlerFunc {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+func handleStopRun(rm *RunManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/runs/stop/")
+		if id == "" {
+			http.Error(w, "run id required", http.StatusBadRequest)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ok, reason := rm.StopRun(id)
+		if !ok {
+			http.Error(w, reason, http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"stopped": id})
 	}
 }
 
@@ -967,7 +1033,7 @@ func handleGetReport(dirs []string) http.HandlerFunc {
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)

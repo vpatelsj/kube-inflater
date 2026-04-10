@@ -110,6 +110,14 @@ export async function deleteRun(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete run: ${res.statusText}`)
 }
 
+export async function stopRun(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/runs/stop/${id}`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+}
+
 export function subscribeToRun(
   runId: string,
   onLog: (line: string) => void,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { fetchRun, subscribeToRun, subscribeToCluster } from '../api/client'
+import { fetchRun, subscribeToRun, subscribeToCluster, stopRun } from '../api/client'
 import type { RunDetail, ClusterSnapshot } from '../api/client'
 import type { ReportType } from '../types/benchmark'
 import LiveStatsCards from '../components/LiveStatsCards'
@@ -140,6 +140,21 @@ export default function RunMonitor() {
           <span className="text-sm text-gray-400">
             Started {new Date(run.startedAt).toLocaleString()}
           </span>
+        )}
+        {status === 'running' && id && (
+          <button
+            onClick={async () => {
+              try {
+                await stopRun(id)
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : 'unknown error'
+                setError(`Failed to stop: ${msg}`)
+              }
+            }}
+            className="ml-auto px-3 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded shadow-sm"
+          >
+            Stop Run
+          </button>
         )}
       </div>
 
