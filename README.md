@@ -61,9 +61,8 @@ mage build && ./bin/watch-agent watch --connections=100 --duration=60
 # Build & push the watch-agent container image (needed for in-cluster watch stress)
 mage watchAgent
 
-# Launch the web UI
-mage benchmarkUI && cd ui && npm install && npm run build && cd ..
-./bin/benchmark-ui --reports-dir=./benchmark-reports --port=8080
+# Deploy the web UI to the cluster and open it locally
+mage ui                     # build → push → deploy → port-forward to localhost:6161
 ```
 
 ## Tools
@@ -196,7 +195,7 @@ Hollow nodes are kubemark processes deployed via a DaemonSet. Each DaemonSet pod
 
 Opens concurrent watch connections against the API server and measures event delivery latency, throughput, and reconnect behavior. Two subcommands: `watch` and `mutate`.
 
-Ships as a container image (`Dockerfile.watch-agent`—distroless, non-root) for in-cluster deployment via Kubernetes Jobs.
+Ships as a container image (`build/Dockerfile.watch-agent` — distroless, non-root) for in-cluster deployment via Kubernetes Jobs.
 
 ### Watch Mode
 
@@ -253,14 +252,34 @@ The `scripts/watch-ramp-cluster.sh` script automates multi-round ramp-up testing
 
 ## benchmark-ui — Web Dashboard
 
-A Go HTTP server + React SPA for launching benchmark runs, monitoring them live with real-time cluster stats, viewing interactive charts, and exporting PDFs.
+A Go HTTP server + React SPA that runs in-cluster. Launch benchmark runs, monitor them live with real-time cluster stats, view interactive charts, trigger nuclear cleanup, and export PDFs — all from the browser.
+
+### Deploying
+
+The recommended way to run the UI is in-cluster via `mage ui`:
 
 ```bash
-# Build backend + frontend
-mage benchmarkUI
-cd ui && npm install && npm run build && cd ..
+mage ui    # builds image → pushes to ACR → deploys to cluster → port-forwards to localhost:6161
+```
 
-# Start the server
+This single command:
+1. Builds a Docker image with all three binaries (`benchmark-ui`, `kube-inflater`, `watch-agent`) and the React frontend
+2. Pushes to `k3sacr1.azurecr.io/benchmark-ui:latest`
+3. Applies RBAC + Deployment + Service manifests from `deploy/benchmark-ui/`
+4. Rolls out the new pod (with auto-bind fallback if the scheduler is backlogged)
+5. Starts `kubectl port-forward` to `localhost:6161` with auto-reconnect
+
+The UI pod runs on a control-plane node with a ServiceAccount that has cluster-wide read/write access. It spawns CLI subprocesses (`kube-inflater`, `watch-agent`) to execute runs, streams their output via SSE, and monitors cluster state in real time.
+
+<details>
+<summary>Running locally (development)</summary>
+
+```bash
+# Build backend + frontend separately
+mage benchmarkUI                        # → bin/benchmark-ui
+cd ui && npm install && npm run build   # → ui/dist/
+
+# Start the server (needs kubeconfig for cluster features)
 ./bin/benchmark-ui --reports-dir=./benchmark-reports --port=8080
 ```
 
@@ -272,13 +291,16 @@ cd ui && npm install && npm run build && cd ..
 | `--static-dir` | `./ui/dist` | Frontend build directory |
 | `--bin-dir` | `./bin` | Directory containing CLI binaries |
 
+</details>
+
 ### Pages
 
 | Route | Page | Description |
 |---|---|---|
-| `/` | Dashboard | Lists active runs (polled every 3 s) and completed reports, grouped by type |
-| `/new-run` | New Run | Form to start resource-creation, api-latency, or watch-stress runs |
-| `/run/:id` | Run Monitor | Live log stream (SSE) + real-time cluster charts (nodes, pods, API health) |
+| `/` | Dashboard | Active/completed runs, "Clean All" button, "Clear Runs" button, completed report links |
+| `/new-run` | New Run | Form to start a resource-creation run with preset or custom config |
+| `/run/:id` | Run Monitor | Live log stream (SSE), real-time cluster charts (nodes, pods, API health), cleanup progress bar |
+| `/cluster` | Cluster Overview | Live cluster-wide resource counts (horizontal bar chart) — no run required |
 | `/report/resource-creation/:id` | Resource Creation Report | Batch throughput bars, cumulative creation line, failure rate per batch |
 | `/report/watch-stress/:id` | Watch Stress Report | Latency breakdown bars, dual-axis scaling chart (events/sec vs connect latency) |
 | `/report/api-latency/:id` | API Latency Report | Top-N slowest endpoints, latency histogram, response-size-vs-latency scatter |
@@ -289,11 +311,30 @@ cd ui && npm install && npm run build && cd ..
 |---|---|---|
 | `GET` | `/api/reports?type=...` | List reports filtered by type |
 | `GET` | `/api/reports/:id` | Single report JSON |
+| `GET` | `/api/presets` | List available t-shirt size presets |
 | `POST` | `/api/runs` | Start a new run (spawns CLI subprocess) |
-| `GET` | `/api/runs` | List all runs |
-| `GET` | `/api/runs/:id` | Run details + logs |
+| `GET` | `/api/runs` | List all runs (summaries) |
+| `GET` | `/api/runs/:id` | Run detail with full log history |
+| `DELETE` | `/api/runs` | Delete all completed/failed runs |
+| `DELETE` | `/api/runs/:id` | Delete a single completed/failed run |
 | `GET` | `/api/runs/events/:id` | SSE stream of log lines and status changes |
-| `GET` | `/api/cluster/live/:id` | SSE stream of cluster snapshots via `clustermon.Monitor` |
+| `GET` | `/api/cluster/live/:id` | SSE stream of cluster snapshots for a running benchmark |
+| `GET` | `/api/cluster/overview` | SSE stream of cluster-wide snapshots (no run required) |
+
+Run state is persisted as ConfigMaps in the `benchmark-ui` namespace, so runs survive pod restarts. Subprocesses run in their own process group and are not affected by SSE client disconnects.
+
+### Cleanup from the UI
+
+The Dashboard's **Clean All** button starts a cleanup run (`kube-inflater --cleanup-all`) that:
+1. Force-deletes all labeled pods, jobs, statefulsets, configmaps, secrets, services, serviceaccounts, and custom resources (with `GracePeriodSeconds=0`)
+2. Removes KWOK fake nodes and controller
+3. Deletes all spread namespaces with cascading deletion
+4. Tears down hollow node DaemonSets and kubemark nodes
+5. Removes watch-agent Jobs, ConfigMaps, RBAC, and FlowSchema
+6. Deletes the StressItem CRD
+7. Waits for namespace termination
+
+The Run Monitor shows a progress bar with step-by-step tracking. After successful cleanup, all finished run records are automatically cleared.
 
 ### Generating Reports
 
@@ -311,7 +352,24 @@ Both CLI tools can write JSON reports that the UI consumes:
 
 Every report page includes a **PDF Export** button (renders the page to canvas via html2canvas, then converts to multi-page PDF with jsPDF).
 
+### Container Image
 
+`build/Dockerfile.benchmark-ui` is a multi-stage build:
+
+| Stage | Base | Output |
+|---|---|---|
+| `frontend` | `node:20-alpine` | `ui/dist/` (React + Vite + Tailwind) |
+| `build` | `golang:1.23-alpine` | Three static binaries: `benchmark-ui`, `kube-inflater`, `watch-agent` |
+| Runtime | `gcr.io/distroless/static:nonroot` | Final image (~70 MB) |
+
+### Kubernetes Manifests
+
+Manifests in `deploy/benchmark-ui/`:
+
+| File | Purpose |
+|---|---|
+| `rbac.yaml` | Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding |
+| `deployment.yaml` | Deployment (Recreate strategy, control-plane nodeSelector) + NodePort Service |
 
 ---
 
@@ -360,25 +418,29 @@ cmd/
   watch-agent/              Watch stress agent (watch + mutate subcommands)
   benchmark-ui/             Web UI server (Go HTTP + SPA)
 internal/
-  config/                   Shared configuration types and defaults
-  inflater/                 Resource creation engine + cleanup with worker pools
-  resourcegen/              Per-type generators (10 types) + generator registry
-  plan/                     Exponential batch-size planning
-  kwok/                     KWOK controller, Stage CRDs, and fake-node provisioning
-  daemonsetspec/            DaemonSet spec builder for kubemark pods
-  nodes/                    Node listing and filtering by labels / run-id
-  perfv2/                   Endpoint discovery and latency reporter
-  watchstress/              Watch connection manager and resource mutator
   benchmarkio/              Report types, JSON/markdown I/O, report listing
   clustermon/               Live cluster state snapshot monitor
+  config/                   Shared configuration types, presets, and defaults
+  daemonsetspec/            DaemonSet spec builder for kubemark pods
+  inflater/                 Resource creation engine + cleanup with worker pools
+  kwok/                     KWOK controller, Stage CRDs, and fake-node provisioning
+  nodes/                    Node listing and filtering by labels / run-id
+  perfv2/                   Endpoint discovery and latency reporter
+  plan/                     Exponential batch-size planning
+  resourcegen/              Per-type generators (10 types) + generator registry
+  runstore/                 Persists run metadata as ConfigMaps in the cluster
+  watchdeploy/              Watch-agent job deployer
+  watchstress/              Watch connection manager and resource mutator
 deploy/
+  benchmark-ui/             Kubernetes manifests (Deployment, Service, RBAC)
   watch-agent/              Kubernetes manifests (Job, RBAC, FlowSchema)
 scripts/
   watch-ramp-cluster.sh     Multi-round watch ramp-up orchestrator
   upgrade-control-plane.sh  SSH-based multi-node K8s component upgrade
 ui/                         React + Vite + Tailwind frontend for benchmark-ui
-  src/pages/                Dashboard, NewRun, RunMonitor, report pages
-  src/components/charts/    Chart.js visualizations (10 chart types)
+  src/pages/                Dashboard, NewRun, RunMonitor, ClusterOverview, report pages
+  src/components/charts/    Chart.js visualizations (11 chart types)
+  src/api/                  API client with SSE subscription helpers
 ```
 
 ## Build Targets (Mage)
@@ -387,10 +449,12 @@ ui/                         React + Vite + Tailwind frontend for benchmark-ui
 mage -l                    # List all targets
 mage build                 # Build kube-inflater (unified binary) → bin/kube-inflater
 mage benchmarkUI           # Build benchmark-ui server → bin/benchmark-ui
+mage ui                    # Build + push + deploy benchmark-ui to cluster, port-forward to :6161
 mage watchAgent            # Build & push watch-agent container image
 mage frontendBuild         # Build React frontend (npm run build in ui/)
 mage test                  # Run all unit tests (go test ./...)
 mage clean                 # Remove bin/
+mage tidy                  # Run go mod tidy
 ```
 
 Or build directly with Go:
@@ -407,7 +471,9 @@ go build -o bin/benchmark-ui ./cmd/benchmark-ui
 - **Node.js** 18+ and npm (for the benchmark UI frontend)
 - **Kubernetes** 1.20+ with RBAC
 - **kubeconfig** with cluster-admin or equivalent permissions
-- **Network** access to `k3sacr1.azurecr.io` (kubemark images, anonymous pull) and `registry.k8s.io` (KWOK controller)
+- **Docker** (for building container images)
+- **Azure CLI** (`az`) for ACR login (used by `mage ui` and `mage watchAgent`)
+- **Network** access to `k3sacr1.azurecr.io` (kubemark images + benchmark-ui, anonymous pull) and `registry.k8s.io` (KWOK controller)
 
 ## Debugging
 
@@ -430,5 +496,10 @@ kubectl get configmaps -n watch-stress -l app=watch-agent
 # Stress-test resources
 kubectl get stressitems -A --no-headers | wc -l
 kubectl get pods -l app=kube-resource-inflater -A --no-headers | wc -l
+
+# Benchmark UI
+kubectl -n benchmark-ui get pods -o wide
+kubectl -n benchmark-ui logs -l app=benchmark-ui --tail=50
+kubectl get configmaps -n benchmark-ui -l app=benchmark-ui   # persisted run records
 ```
 

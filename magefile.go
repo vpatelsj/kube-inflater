@@ -127,7 +127,7 @@ const benchmarkUIImage = "k3sacr1.azurecr.io/benchmark-ui:latest"
 // WatchAgent builds and pushes the watch-agent container image
 func WatchAgent() error {
 	fmt.Println("==> Building watch-agent image 📡")
-	if err := run("docker", "build", "-f", "Dockerfile.watch-agent", "-t", watchAgentImage, "."); err != nil {
+	if err := run("docker", "build", "-f", "build/Dockerfile.watch-agent", "-t", watchAgentImage, "."); err != nil {
 		return err
 	}
 	fmt.Println("==> Logging in to ACR")
@@ -145,7 +145,7 @@ func WatchAgent() error {
 // BenchmarkUIImage builds and pushes the benchmark-ui container image
 func BenchmarkUIImage() error {
 	fmt.Println("==> Building benchmark-ui image 📊")
-	if err := run("docker", "build", "--no-cache", "-f", "Dockerfile.benchmark-ui", "-t", benchmarkUIImage, "."); err != nil {
+	if err := run("docker", "build", "--no-cache", "-f", "build/Dockerfile.benchmark-ui", "-t", benchmarkUIImage, "."); err != nil {
 		return err
 	}
 	fmt.Println("==> Logging in to ACR")
