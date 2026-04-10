@@ -5,9 +5,6 @@ import type { APILatencyReport as APILatencyReportType } from '../types/benchmar
 import ReportHeader from '../components/ReportHeader'
 import ClusterInfoCard from '../components/ClusterInfoCard'
 import PDFExportButton from '../components/PDFExportButton'
-import LatencyBarChart from '../components/charts/LatencyBarChart'
-import LatencyScatterChart from '../components/charts/LatencyScatterChart'
-import LatencyHistogram from '../components/charts/LatencyHistogram'
 
 export default function APILatencyReport() {
   const { id } = useParams<{ id: string }>()
@@ -134,12 +131,6 @@ export default function APILatencyReport() {
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
-          <LatencyBarChart measurements={r.measurements} />
-          <LatencyHistogram measurements={r.measurements} />
-          <LatencyScatterChart measurements={r.measurements} />
         </div>
 
         {/* Full results table */}

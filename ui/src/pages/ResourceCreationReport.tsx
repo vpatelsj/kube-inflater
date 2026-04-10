@@ -5,10 +5,6 @@ import type { ResourceCreationReport as ResourceCreationReportType } from '../ty
 import ReportHeader from '../components/ReportHeader'
 import ClusterInfoCard from '../components/ClusterInfoCard'
 import PDFExportButton from '../components/PDFExportButton'
-import ThroughputChart from '../components/charts/ThroughputChart'
-import CumulativeChart from '../components/charts/CumulativeChart'
-import FailureRateChart from '../components/charts/FailureRateChart'
-import LatencyBarChart from '../components/charts/LatencyBarChart'
 
 export default function ResourceCreationReport() {
   const { id } = useParams<{ id: string }>()
@@ -74,7 +70,7 @@ export default function ResourceCreationReport() {
                       <td className={`px-3 py-1.5 text-right font-mono ${failPct > 0 ? 'text-red-600' : 'text-gray-400'}`}>{failPct.toFixed(2)}%</td>
                       <td className="px-3 py-1.5 text-right font-mono">{(res.totalDurationMs / 1000).toFixed(1)}s</td>
                       <td className="px-3 py-1.5 text-right font-mono text-blue-600">{res.throughput.toFixed(1)}/s</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{res.batches.length}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{(res.batches ?? []).length}</td>
                     </tr>
                   )
                 })}
@@ -85,7 +81,7 @@ export default function ResourceCreationReport() {
                   <td className="px-3 py-1.5 text-right font-mono">—</td>
                   <td className="px-3 py-1.5 text-right font-mono">{(r.results.reduce((s, x) => s + x.totalDurationMs, 0) / 1000).toFixed(1)}s</td>
                   <td className="px-3 py-1.5 text-right font-mono">—</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{r.results.reduce((s, x) => s + x.batches.length, 0)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{r.results.reduce((s, x) => s + (x.batches ?? []).length, 0)}</td>
                 </tr>
               </tbody>
             </table>
@@ -120,64 +116,62 @@ export default function ResourceCreationReport() {
               </div>
             </div>
 
-            {/* Batch detail table */}
-            <div className="bg-white rounded-lg p-4 shadow-sm border mb-4 overflow-x-auto">
-              <h4 className="text-sm font-semibold text-gray-500 mb-2">Batch Details</h4>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
-                    <th className="px-3 py-1.5 text-right">#</th>
-                    <th className="px-3 py-1.5 text-right">Size</th>
-                    <th className="px-3 py-1.5 text-right">Created</th>
-                    <th className="px-3 py-1.5 text-right">Failed</th>
-                    <th className="px-3 py-1.5 text-right">Fail %</th>
-                    <th className="px-3 py-1.5 text-right">Duration</th>
-                    <th className="px-3 py-1.5 text-right">Throughput</th>
-                    <th className="px-3 py-1.5">Progress</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.batches.map((b) => {
-                    const failPct = b.size > 0 ? (b.failed / b.size) * 100 : 0
-                    const cumCreated = result.batches.slice(0, b.batchNum).reduce((s, x) => s + x.created, 0)
-                    const pct = result.totalCreated > 0 ? (cumCreated / result.totalCreated) * 100 : 0
-                    return (
-                      <tr key={b.batchNum} className="border-b border-gray-100">
-                        <td className="px-3 py-1 text-right font-mono">{b.batchNum}</td>
-                        <td className="px-3 py-1 text-right font-mono">{b.size.toLocaleString()}</td>
-                        <td className="px-3 py-1 text-right font-mono text-green-600">{b.created.toLocaleString()}</td>
-                        <td className={`px-3 py-1 text-right font-mono ${b.failed > 0 ? 'text-red-600' : 'text-gray-400'}`}>{b.failed}</td>
-                        <td className={`px-3 py-1 text-right font-mono ${failPct > 0 ? 'text-red-600' : 'text-gray-400'}`}>{failPct.toFixed(1)}%</td>
-                        <td className="px-3 py-1 text-right font-mono">{b.durationMs >= 1000 ? `${(b.durationMs / 1000).toFixed(1)}s` : `${b.durationMs}ms`}</td>
-                        <td className="px-3 py-1 text-right font-mono text-blue-600">{b.throughput.toFixed(0)}/s</td>
-                        <td className="px-3 py-1 w-32">
-                          <div className="bg-gray-100 rounded-full h-2">
-                            <div className="bg-blue-500 rounded-full h-2" style={{ width: `${Math.min(pct, 100)}%` }} />
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {/* Batch detail table — only for batch-based types */}
+            {result.batches && result.batches.length > 0 ? (
+              <>
+              <div className="bg-white rounded-lg p-4 shadow-sm border mb-4 overflow-x-auto">
+                <h4 className="text-sm font-semibold text-gray-500 mb-2">Batch Details</h4>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                      <th className="px-3 py-1.5 text-right">#</th>
+                      <th className="px-3 py-1.5 text-right">Size</th>
+                      <th className="px-3 py-1.5 text-right">Created</th>
+                      <th className="px-3 py-1.5 text-right">Failed</th>
+                      <th className="px-3 py-1.5 text-right">Fail %</th>
+                      <th className="px-3 py-1.5 text-right">Duration</th>
+                      <th className="px-3 py-1.5 text-right">Throughput</th>
+                      <th className="px-3 py-1.5">Progress</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.batches.map((b) => {
+                      const failPct = b.size > 0 ? (b.failed / b.size) * 100 : 0
+                      const cumCreated = result.batches.slice(0, b.batchNum).reduce((s, x) => s + x.created, 0)
+                      const pct = result.totalCreated > 0 ? (cumCreated / result.totalCreated) * 100 : 0
+                      return (
+                        <tr key={b.batchNum} className="border-b border-gray-100">
+                          <td className="px-3 py-1 text-right font-mono">{b.batchNum}</td>
+                          <td className="px-3 py-1 text-right font-mono">{b.size.toLocaleString()}</td>
+                          <td className="px-3 py-1 text-right font-mono text-green-600">{b.created.toLocaleString()}</td>
+                          <td className={`px-3 py-1 text-right font-mono ${b.failed > 0 ? 'text-red-600' : 'text-gray-400'}`}>{b.failed}</td>
+                          <td className={`px-3 py-1 text-right font-mono ${failPct > 0 ? 'text-red-600' : 'text-gray-400'}`}>{failPct.toFixed(1)}%</td>
+                          <td className="px-3 py-1 text-right font-mono">{b.durationMs >= 1000 ? `${(b.durationMs / 1000).toFixed(1)}s` : `${b.durationMs}ms`}</td>
+                          <td className="px-3 py-1 text-right font-mono text-blue-600">{b.throughput.toFixed(0)}/s</td>
+                          <td className="px-3 py-1 w-32">
+                            <div className="bg-gray-100 rounded-full h-2">
+                              <div className="bg-blue-500 rounded-full h-2" style={{ width: `${Math.min(pct, 100)}%` }} />
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <ThroughputChart batches={result.batches} title={`${result.resourceType} — Batch Throughput`} />
-              <CumulativeChart batches={result.batches} />
-              <FailureRateChart batches={result.batches} />
-            </div>
+              </>
+            ) : (
+              <div className="bg-gray-50 rounded-lg p-3 border text-sm text-gray-500 italic">
+                Setup-based resource — created via DaemonSet, no per-batch data available
+              </div>
+            )}
           </div>
         ))}
 
         {r.clusterInfo && <ClusterInfoCard info={r.clusterInfo} />}
 
-        {r.apiLatency && r.apiLatency.length > 0 && (
-          <div className="mt-6">
-            <h3 className="text-lg font-semibold mb-3">API Latency Under Load</h3>
-            <LatencyBarChart measurements={r.apiLatency} />
-          </div>
-        )}
+
       </div>
     </div>
   )

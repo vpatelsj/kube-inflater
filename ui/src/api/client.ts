@@ -131,6 +131,13 @@ export interface ClusterSnapshot {
   namespaces: number
   resourceCounts: Record<string, number>
   apiHealthMs: number
+  // Cluster-wide totals (unfiltered)
+  clusterPods: number
+  clusterConfigmaps: number
+  clusterSecrets: number
+  clusterServices: number
+  clusterJobs: number
+  clusterNamespaces: number
 }
 
 export function subscribeToCluster(
@@ -139,6 +146,24 @@ export function subscribeToCluster(
   onError: (err: string) => void,
 ): EventSource {
   const es = new EventSource(`${API_BASE}/cluster/live/${runId}`)
+  es.addEventListener('snapshot', (e) => {
+    const snap = JSON.parse((e as MessageEvent).data) as ClusterSnapshot
+    onSnapshot(snap)
+  })
+  es.addEventListener('error', (e) => {
+    if ((e as MessageEvent).data) {
+      const data = JSON.parse((e as MessageEvent).data) as { error: string }
+      onError(data.error)
+    }
+  })
+  return es
+}
+
+export function subscribeToClusterOverview(
+  onSnapshot: (snap: ClusterSnapshot) => void,
+  onError: (err: string) => void,
+): EventSource {
+  const es = new EventSource(`${API_BASE}/cluster/overview`)
   es.addEventListener('snapshot', (e) => {
     const snap = JSON.parse((e as MessageEvent).data) as ClusterSnapshot
     onSnapshot(snap)

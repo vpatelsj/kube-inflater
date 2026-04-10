@@ -117,6 +117,7 @@ func FrontendBuild() error {
 }
 
 const watchAgentImage = "k3sacr1.azurecr.io/watch-agent:latest"
+const benchmarkUIImage = "k3sacr1.azurecr.io/benchmark-ui:latest"
 
 // WatchAgent builds and pushes the watch-agent container image
 func WatchAgent() error {
@@ -134,4 +135,61 @@ func WatchAgent() error {
 	}
 	fmt.Printf("==> Published %s\n", watchAgentImage)
 	return nil
+}
+
+// BenchmarkUIImage builds and pushes the benchmark-ui container image
+func BenchmarkUIImage() error {
+	fmt.Println("==> Building benchmark-ui image 📊")
+	if err := run("docker", "build", "-f", "Dockerfile.benchmark-ui", "-t", benchmarkUIImage, "."); err != nil {
+		return err
+	}
+	fmt.Println("==> Logging in to ACR")
+	if err := run("az", "acr", "login", "--name", "k3sacr1"); err != nil {
+		return fmt.Errorf("ACR login failed (ensure 'az' CLI is installed and logged in): %w", err)
+	}
+	fmt.Println("==> Pushing benchmark-ui image 📊")
+	if err := run("docker", "push", benchmarkUIImage); err != nil {
+		return err
+	}
+	fmt.Printf("==> Published %s\n", benchmarkUIImage)
+	return nil
+}
+
+// UI builds the benchmark-ui image, pushes it, and deploys to the cluster.
+func UI() error {
+	if err := BenchmarkUIImage(); err != nil {
+		return err
+	}
+	fmt.Println("==> Deploying benchmark-ui to cluster 🚀")
+	if err := run("kubectl", "apply", "-f", "deploy/benchmark-ui/rbac.yaml"); err != nil {
+		return err
+	}
+	if err := run("kubectl", "apply", "-f", "deploy/benchmark-ui/deployment.yaml"); err != nil {
+		return err
+	}
+	if err := run("kubectl", "-n", "benchmark-ui", "rollout", "restart", "deployment/benchmark-ui"); err != nil {
+		return err
+	}
+	if err := run("kubectl", "-n", "benchmark-ui", "rollout", "status", "deployment/benchmark-ui", "--timeout=120s"); err != nil {
+		return err
+	}
+	fmt.Println("==> benchmark-ui deployed ✅")
+	// Print the access info
+	_ = run("kubectl", "-n", "benchmark-ui", "get", "svc", "benchmark-ui")
+	fmt.Println("==> Starting port-forward to localhost:6161 🔌")
+	fmt.Println("    Open http://localhost:6161 in your browser")
+	fmt.Println("    (auto-reconnects if the pod restarts, Ctrl+C to stop)")
+	maxRetries := 30
+	for i := 0; ; i++ {
+		err := run("kubectl", "-n", "benchmark-ui", "port-forward", "svc/benchmark-ui", "6161:8080")
+		if err == nil {
+			return nil
+		}
+		if i >= maxRetries {
+			return fmt.Errorf("port-forward failed after %d retries", maxRetries)
+		}
+		fmt.Println("==> port-forward lost, waiting for pod ready before reconnecting…")
+		_ = run("kubectl", "-n", "benchmark-ui", "wait", "--for=condition=ready", "pod", "-l", "app=benchmark-ui", "--timeout=120s")
+		fmt.Println("==> reconnecting port-forward…")
+	}
 }

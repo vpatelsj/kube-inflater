@@ -3,8 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { fetchRun, subscribeToRun, subscribeToCluster } from '../api/client'
 import type { RunDetail, ClusterSnapshot } from '../api/client'
 import type { ReportType } from '../types/benchmark'
-import LiveClusterChart from '../components/charts/LiveClusterChart'
 import LiveStatsCards from '../components/LiveStatsCards'
+import LiveClusterChart from '../components/charts/LiveClusterChart'
 
 function reportRoute(type: string, id: string): string {
   return `/report/${type}/${id}`
@@ -97,11 +97,6 @@ export default function RunMonitor() {
 
   const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1]! : null
 
-  // Determine resource types from the run config for chart labeling
-  const resourceTypes = run?.config?.resourceTypes
-    ? String(run.config.resourceTypes).split(',').map((s: string) => s.trim())
-    : []
-
   return (
     <div>
       <div className="flex items-center gap-4 mb-4">
@@ -121,7 +116,7 @@ export default function RunMonitor() {
       {(status === 'running' || snapshots.length > 0) && (
         <div className="space-y-4 mb-4">
           <LiveStatsCards snapshot={latestSnapshot} />
-          <LiveClusterChart snapshots={snapshots} resourceTypes={resourceTypes} />
+          <LiveClusterChart snapshots={snapshots} resourceTypes={[]} />
         </div>
       )}
 

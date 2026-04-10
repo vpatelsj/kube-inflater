@@ -101,6 +101,54 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* All runs (including completed/failed) */}
+      {runs.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-gray-500 mb-2 uppercase tracking-wide">Runs</h2>
+          <div className="bg-white rounded-lg shadow-sm border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
+                  <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Type</th>
+                  <th className="px-4 py-2">Run ID</th>
+                  <th className="px-4 py-2">Started</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => {
+                  const sBadge = statusBadge[r.status]
+                  return (
+                    <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-4 py-2">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${sBadge?.color}`}>
+                          {sBadge?.label ?? r.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${typeBadge[r.type as ReportType]?.color ?? 'bg-gray-100'}`}>
+                          {typeBadge[r.type as ReportType]?.label ?? r.type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-gray-600">{r.id}</td>
+                      <td className="px-4 py-2 text-xs text-gray-400">
+                        {new Date(r.startedAt).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        <Link to={r.reportID ? reportRoute(r.type as ReportType, r.reportID) : `/run/${r.id}`} className="text-blue-600 hover:underline text-xs font-medium">
+                          {r.reportID ? 'Report →' : 'View →'}
+                        </Link>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Completed reports */}
       {reports.length > 0 && (
         <div>

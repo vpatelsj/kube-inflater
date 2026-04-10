@@ -4,8 +4,6 @@ import { useReport } from '../hooks/useBenchmarkData'
 import type { WatchStressReport as WatchStressReportType } from '../types/benchmark'
 import ReportHeader from '../components/ReportHeader'
 import PDFExportButton from '../components/PDFExportButton'
-import ConnectLatencyChart from '../components/charts/ConnectLatencyChart'
-import ScalingChart from '../components/charts/ScalingChart'
 
 export default function WatchStressReport() {
   const { id } = useParams<{ id: string }>()
@@ -129,13 +127,6 @@ export default function WatchStressReport() {
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <ConnectLatencyChart metrics={m} />
-          {r.scalingData && r.scalingData.length > 0 && (
-            <ScalingChart data={r.scalingData} />
-          )}
         </div>
 
         {/* Scaling data table */}

@@ -19,6 +19,7 @@ import (
 	"kube-inflater/internal/benchmarkio"
 	"kube-inflater/internal/clustermon"
 	cfgpkg "kube-inflater/internal/config"
+	"kube-inflater/internal/runstore"
 )
 
 // Run tracks a benchmark run launched from the UI.
@@ -68,14 +69,57 @@ type RunManager struct {
 	runs       map[string]*Run
 	reportsDir string
 	binDir     string
+	store      *runstore.Store // nil if cluster unavailable
 }
 
-func NewRunManager(reportsDir, binDir string) *RunManager {
-	return &RunManager{
+func NewRunManager(reportsDir, binDir string, store *runstore.Store) *RunManager {
+	rm := &RunManager{
 		runs:       make(map[string]*Run),
 		reportsDir: reportsDir,
 		binDir:     binDir,
+		store:      store,
 	}
+
+	// Restore persisted runs from ConfigMaps
+	if store != nil {
+		persisted, err := store.LoadAll()
+		if err != nil {
+			log.Printf("WARNING: Failed to load persisted runs: %v", err)
+		} else {
+			for _, pr := range persisted {
+				run := &Run{
+					ID:        pr.ID,
+					Type:      pr.Type,
+					Status:    pr.Status,
+					StartedAt: pr.StartedAt,
+					EndedAt:   pr.EndedAt,
+					ReportID:  pr.ReportID,
+					Error:     pr.Error,
+					CLIRunID:  pr.CLIRunID,
+					LogLines:  pr.LogLines,
+				}
+				// Unmarshal config
+				if len(pr.Config) > 0 {
+					json.Unmarshal(pr.Config, &run.Config)
+				}
+				// Mark running/pending runs as interrupted (process is gone after restart)
+				if run.Status == "running" || run.Status == "pending" {
+					run.Status = "failed"
+					run.Error = "interrupted by server restart"
+					run.EndedAt = time.Now().UTC().Format(time.RFC3339)
+					run.LogLines = append(run.LogLines, "❌ Run interrupted by server restart")
+					rm.persistRun(run)
+				}
+				if t, err := time.Parse(time.RFC3339, run.StartedAt); err == nil {
+					run.startTime = t
+				}
+				rm.runs[run.ID] = run
+			}
+			log.Printf("Restored %d persisted runs from cluster", len(persisted))
+		}
+	}
+
+	return rm
 }
 
 func (rm *RunManager) StartRun(runType string, cfg RunConfig) (*Run, error) {
@@ -93,6 +137,8 @@ func (rm *RunManager) StartRun(runType string, cfg RunConfig) (*Run, error) {
 	rm.mu.Lock()
 	rm.runs[id] = run
 	rm.mu.Unlock()
+
+	rm.persistRun(run)
 
 	go rm.executeRun(run)
 	return run, nil
@@ -118,6 +164,7 @@ func (rm *RunManager) executeRun(run *Run) {
 	run.mu.Lock()
 	run.Status = "running"
 	run.mu.Unlock()
+	rm.persistRun(run)
 
 	var args []string
 	var binary string
@@ -167,9 +214,16 @@ func (rm *RunManager) executeRun(run *Run) {
 
 	scanner := bufio.NewScanner(pipe)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	logCount := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		rm.appendLog(run, line)
+		logCount++
+
+		// Persist periodically (every 100 lines) so logs survive crashes
+		if logCount%100 == 0 {
+			rm.persistRun(run)
+		}
 
 		// Extract CLI run-id from log output (e.g. "[INFO] Run ID: 20260406-175709-2843")
 		if strings.Contains(line, "Run ID:") {
@@ -178,6 +232,7 @@ func (rm *RunManager) executeRun(run *Run) {
 				run.mu.Lock()
 				run.CLIRunID = strings.TrimSpace(parts[1])
 				run.mu.Unlock()
+				rm.persistRun(run)
 			}
 		}
 	}
@@ -197,6 +252,7 @@ func (rm *RunManager) executeRun(run *Run) {
 		run.ReportID = rm.findLatestReport(run.Type)
 	}
 	run.mu.Unlock()
+	rm.persistRun(run)
 }
 
 func (rm *RunManager) buildResourceInflaterArgs(cfg RunConfig) []string {
@@ -267,11 +323,40 @@ func (rm *RunManager) buildWatchAgentArgs(cfg RunConfig) []string {
 
 func (rm *RunManager) failRun(run *Run, msg string) {
 	run.mu.Lock()
-	defer run.mu.Unlock()
 	run.Status = "failed"
 	run.Error = msg
 	run.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	rm.appendLogLocked(run, "❌ "+msg)
+	run.mu.Unlock()
+	rm.persistRun(run)
+}
+
+// persistRun saves the run state to a ConfigMap (best-effort, non-blocking).
+func (rm *RunManager) persistRun(run *Run) {
+	if rm.store == nil {
+		return
+	}
+	run.mu.Lock()
+	cfgJSON, _ := json.Marshal(run.Config)
+	pr := &runstore.PersistedRun{
+		ID:        run.ID,
+		Type:      run.Type,
+		Status:    run.Status,
+		StartedAt: run.StartedAt,
+		EndedAt:   run.EndedAt,
+		Config:    cfgJSON,
+		ReportID:  run.ReportID,
+		Error:     run.Error,
+		CLIRunID:  run.CLIRunID,
+		LogLines:  run.LogLines,
+	}
+	run.mu.Unlock()
+
+	go func() {
+		if err := rm.store.Save(pr); err != nil {
+			log.Printf("WARNING: failed to persist run %s: %v", pr.ID, err)
+		}
+	}()
 }
 
 func (rm *RunManager) appendLog(run *Run, line string) {
@@ -320,7 +405,17 @@ func main() {
 		}
 	}
 
-	runMgr := NewRunManager(*reportsDir, *binDir)
+	// Initialize run store (persists runs as ConfigMaps — optional)
+	var store *runstore.Store
+	if s, err := runstore.New(); err != nil {
+		log.Printf("WARNING: Run store unavailable (no kubeconfig): %v", err)
+		log.Printf("  Runs will not survive server restarts.")
+	} else {
+		store = s
+		log.Printf("Run store initialized — runs will be persisted to cluster")
+	}
+
+	runMgr := NewRunManager(*reportsDir, *binDir, store)
 
 	// Initialize cluster monitor (optional — works without a cluster)
 	var monitor *clustermon.Monitor
@@ -349,6 +444,9 @@ func main() {
 
 	// Live cluster monitoring SSE
 	mux.HandleFunc("/api/cluster/live/", corsMiddleware(handleClusterLiveSSE(runMgr, monitor)))
+
+	// Standalone cluster snapshot SSE (no run required)
+	mux.HandleFunc("/api/cluster/overview", corsMiddleware(handleClusterOverviewSSE(monitor)))
 
 	// Serve frontend static files
 	if _, err := os.Stat(*staticDir); err == nil {
@@ -567,6 +665,9 @@ func handleClusterLiveSSE(rm *RunManager, monitor *clustermon.Monitor) http.Hand
 
 			// Take a snapshot from the cluster
 			snap, err := monitor.TakeSnapshot(ctx, cliRunID, startTime)
+			if ctx.Err() != nil {
+				return // client disconnected
+			}
 			if err != nil {
 				errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
 				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
@@ -580,6 +681,52 @@ func handleClusterLiveSSE(rm *RunManager, monitor *clustermon.Monitor) http.Hand
 				// Send one final snapshot then close
 				return
 			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+		}
+	}
+}
+
+// handleClusterOverviewSSE streams cluster-wide snapshots as SSE without requiring a run.
+func handleClusterOverviewSSE(monitor *clustermon.Monitor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if monitor == nil {
+			http.Error(w, "cluster monitor not available (no kubeconfig)", http.StatusServiceUnavailable)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		pollInterval := 2 * time.Second
+		ctx := r.Context()
+		startTime := time.Now()
+
+		for {
+			snap, err := monitor.TakeSnapshot(ctx, "", startTime)
+			if ctx.Err() != nil {
+				return // client disconnected
+			}
+			if err != nil {
+				errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errJSON)
+			} else {
+				snapJSON, _ := json.Marshal(snap)
+				fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapJSON)
+			}
+			flusher.Flush()
 
 			select {
 			case <-ctx.Done():
