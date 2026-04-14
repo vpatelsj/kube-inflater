@@ -247,12 +247,14 @@ func generateBenchmarkReport(engine *inflater.Engine, clientset kubernetes.Inter
 	report.ClusterInfo = &clusterInfo
 
 	// Run API latency tests
-	logInfo("Running API performance tests...")
-	measurements, err := reporter.RunPerformanceTest()
-	if err != nil {
-		logWarn(fmt.Sprintf("API performance test failed: %v (report will be generated without API metrics)", err))
-	} else {
-		report.APIMeasurements = measurements
+	if !cfg.SkipPerfTests {
+		logInfo("Running API performance tests...")
+		measurements, err := reporter.RunPerformanceTest()
+		if err != nil {
+			logWarn(fmt.Sprintf("API performance test failed: %v (report will be generated without API metrics)", err))
+		} else {
+			report.APIMeasurements = measurements
+		}
 	}
 
 	// Write report
@@ -356,6 +358,7 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.BoolVar(&cfg.KWOKCleanup, "kwok-cleanup-controller", false, "Also remove the KWOK controller on cleanup")
 	flag.BoolVar(&benchmarkReport, "benchmark-report", false, "Generate a combined benchmark report after resource creation")
 	flag.BoolVar(&jsonReport, "json-report", true, "Generate a JSON benchmark report (for benchmark-ui); use --json-report=false to disable")
+	flag.BoolVar(&cfg.SkipPerfTests, "skip-perf-tests", false, "Skip API latency tests in the JSON report")
 	flag.StringVar(&reportOutputDir, "report-output-dir", "./benchmark-reports", "Directory to save the benchmark report")
 
 	// Watch stress flags (set automatically by presets, can be overridden)
@@ -393,6 +396,7 @@ func loadConfig() (cfg *cfgpkg.ResourceInflaterConfig, benchmarkReport bool, jso
 	flag.IntVar(&hollowWaitSec, "hollow-wait-timeout", hollowWaitSec, "Seconds to wait for hollow nodes to become ready")
 	flag.BoolVar(&hollowOpts.PrunePrevious, "prune-previous", false, "Prune older hollow-node DaemonSets before creating a new one")
 	flag.IntVar(&hollowOpts.RetainDaemonSets, "retain-daemonsets", hollowOpts.RetainDaemonSets, "Number of most recent hollow-node DaemonSets to retain when pruning")
+	flag.StringVar(&hollowOpts.DaemonSetName, "daemonset-name", "", "Explicit DaemonSet name for hollow nodes (auto-generated if empty)")
 	tokenAudStr := ""
 	flag.StringVar(&tokenAudStr, "token-audiences", "", "Comma-separated ServiceAccount token audiences for hollow-node kubeconfig (default: auto)")
 

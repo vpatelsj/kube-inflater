@@ -8,11 +8,11 @@
 
 set -euo pipefail
 
-NAMESPACE="kubemark-incremental-test"
-TARGET=300000
-STEP_END=50
-CONTAINERS_PER_POD=10
-INFLATER_DIR="/home/vapa/dev/kube-inflater-ci"
+NAMESPACE="${NAMESPACE:-kubemark-incremental-test}"
+TARGET="${TARGET:-300000}"
+STEP_END="${STEP_END:-50}"
+CONTAINERS_PER_POD="${CONTAINERS_PER_POD:-10}"
+INFLATER_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,9 +75,12 @@ for step in $(seq "$STEP_START" "$STEP_END"); do
     --resource-types=hollownodes \
     --count=0 \
     --containers-per-pod "$CONTAINERS_PER_POD" \
+    --daemonset-name "$DS_NAME" \
     --node-lease-duration 240 \
     --node-status-frequency 60s \
-    --node-monitor-grace 240s 2>&1
+    --node-monitor-grace 240s \
+    --skip-perf-tests \
+    --report-output-dir "${INFLATER_DIR}/benchmark-reports" 2>&1
 
   # Wait for new hollow nodes to register
   log "Waiting for hollow nodes from ${DS_NAME} to register..."

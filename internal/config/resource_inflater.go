@@ -30,6 +30,7 @@ type HollowNodeOpts struct {
 	WaitTimeout       time.Duration
 	PrunePrevious     bool
 	RetainDaemonSets  int
+	DaemonSetName     string // explicit DaemonSet name; auto-generated if empty
 }
 
 // ResourceInflaterConfig holds configuration for the kube-resource-inflater command.

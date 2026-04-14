@@ -104,7 +104,11 @@ const maxContainersPerPod = 200
 // automatically scaled up when the cluster does not have enough
 // schedulable nodes to reach the requested count, capped at 200 per node.
 func (h *HollowNodeGenerator) Setup(ctx context.Context, client kubernetes.Interface, _ dynamic.Interface, runID string, count int, dryRun bool) (int, error) {
-	h.daemonSetName = h.generateDaemonSetName(runID)
+	if h.opts.DaemonSetName != "" {
+		h.daemonSetName = h.opts.DaemonSetName
+	} else {
+		h.daemonSetName = h.generateDaemonSetName(runID)
+	}
 
 	if dryRun {
 		logHollow("[DRY-RUN] Would create hollow node DaemonSet %s in %s (containers-per-pod=%d)",
